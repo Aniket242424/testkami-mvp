@@ -1,4 +1,4 @@
-# Autosana MVP - AI-Powered Test Automation Platform
+# TestKami MVP - AI-Powered Test Automation Platform
 
 A modern test automation platform that democratizes QA workflows using AI and Appium. Convert natural language test cases into automated test scripts and execute them on mobile and web applications.
 
