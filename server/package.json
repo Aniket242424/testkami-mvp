@@ -1,0 +1,33 @@
+{
+  "name": "testkami-server",
+  "version": "1.0.0",
+  "description": "Backend server for Autosana test automation platform",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js",
+    "test": "jest"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "multer": "^1.4.5-lts.1",
+    "openai": "^4.20.1",
+    "@sendgrid/mail": "^7.7.0",
+    "axios": "^1.6.0",
+    "uuid": "^9.0.1",
+    "fs-extra": "^11.1.1",
+    "path": "^0.12.7",
+    "helmet": "^7.1.0",
+    "express-rate-limit": "^7.1.5",
+    "compression": "^1.7.4"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1",
+    "jest": "^29.7.0"
+  },
+  "keywords": ["test-automation", "appium", "ai", "backend", "api"],
+  "author": "Autosana MVP Team",
+  "license": "MIT"
+}
