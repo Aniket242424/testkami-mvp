@@ -72,6 +72,23 @@ class ReportService {
   async generateHTMLReport(report) {
     const { id, testCase, platform, status, result, duration, timestamp, steps, summary, screenshots, logs, error, metadata } = report;
 
+    // Format duration
+    const formatDuration = (ms) => {
+      if (!ms) return 'N/A';
+      const seconds = Math.floor(ms / 1000);
+      const minutes = Math.floor(seconds / 60);
+      if (minutes > 0) {
+        return `${minutes}m ${seconds % 60}s`;
+      }
+      return `${seconds}s`;
+    };
+
+    // Fix screenshot paths to use web URLs
+    const getScreenshotUrl = (screenshotPath) => {
+      const filename = screenshotPath.split('\\').pop(); // Get filename from Windows path
+      return `/reports/screenshots/${filename}`;
+    };
+
     const html = `
 <!DOCTYPE html>
 <html lang="en">
@@ -102,35 +119,45 @@ class ReportService {
         .header {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
-            padding: 30px;
-            border-radius: 10px;
-            margin-bottom: 30px;
+            padding: 40px 20px;
+            border-radius: 15px;
             text-align: center;
+            margin-bottom: 30px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.1);
         }
         
         .header h1 {
             font-size: 2.5rem;
             margin-bottom: 10px;
+            font-weight: 700;
+        }
+        
+        .header p {
+            font-size: 1.1rem;
+            opacity: 0.9;
+            margin-bottom: 20px;
         }
         
         .status-badge {
             display: inline-block;
-            padding: 8px 16px;
-            border-radius: 20px;
+            padding: 12px 24px;
+            border-radius: 25px;
             font-weight: bold;
-            font-size: 0.9rem;
+            font-size: 1.1rem;
             text-transform: uppercase;
-            letter-spacing: 0.5px;
+            letter-spacing: 1px;
         }
         
         .status-pass {
-            background-color: #28a745;
+            background: #28a745;
             color: white;
+            box-shadow: 0 4px 15px rgba(40, 167, 69, 0.3);
         }
         
         .status-fail {
-            background-color: #dc3545;
+            background: #dc3545;
             color: white;
+            box-shadow: 0 4px 15px rgba(220, 53, 69, 0.3);
         }
         
         .summary-grid {
@@ -142,51 +169,62 @@ class ReportService {
         
         .summary-card {
             background: white;
-            padding: 20px;
-            border-radius: 10px;
+            padding: 25px;
+            border-radius: 12px;
             box-shadow: 0 2px 10px rgba(0,0,0,0.1);
             text-align: center;
+            transition: transform 0.2s ease;
+        }
+        
+        .summary-card:hover {
+            transform: translateY(-2px);
         }
         
         .summary-card h3 {
             color: #666;
             font-size: 0.9rem;
             text-transform: uppercase;
-            letter-spacing: 0.5px;
+            letter-spacing: 1px;
             margin-bottom: 10px;
         }
         
         .summary-card .value {
-            font-size: 2rem;
+            font-size: 1.8rem;
             font-weight: bold;
             color: #333;
         }
         
-        .steps-section {
-            background: white;
-            border-radius: 10px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-            margin-bottom: 30px;
-            overflow: hidden;
-        }
-        
         .section-header {
-            background: #f8f9fa;
+            background: white;
             padding: 20px;
-            border-bottom: 1px solid #e9ecef;
+            border-radius: 12px 12px 0 0;
+            border-bottom: 2px solid #f8f9fa;
         }
         
         .section-header h2 {
             color: #333;
             font-size: 1.5rem;
+            font-weight: 600;
+        }
+        
+        .steps-section {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            margin-bottom: 30px;
+            overflow: hidden;
         }
         
         .step-item {
-            padding: 15px 20px;
-            border-bottom: 1px solid #e9ecef;
             display: flex;
             align-items: center;
-            gap: 15px;
+            padding: 20px;
+            border-bottom: 1px solid #f8f9fa;
+            transition: background-color 0.2s ease;
+        }
+        
+        .step-item:hover {
+            background-color: #f8f9fa;
         }
         
         .step-item:last-child {
@@ -194,16 +232,17 @@ class ReportService {
         }
         
         .step-number {
-            background: #007bff;
+            background: #667eea;
             color: white;
-            width: 30px;
-            height: 30px;
+            width: 40px;
+            height: 40px;
             border-radius: 50%;
             display: flex;
             align-items: center;
             justify-content: center;
             font-weight: bold;
-            font-size: 0.9rem;
+            font-size: 1rem;
+            margin-right: 20px;
         }
         
         .step-content {
@@ -214,6 +253,7 @@ class ReportService {
             font-weight: 600;
             color: #333;
             margin-bottom: 5px;
+            font-size: 1.1rem;
         }
         
         .step-details {
@@ -222,11 +262,12 @@ class ReportService {
         }
         
         .step-status {
-            padding: 4px 12px;
-            border-radius: 15px;
+            padding: 6px 16px;
+            border-radius: 20px;
             font-size: 0.8rem;
             font-weight: bold;
             text-transform: uppercase;
+            letter-spacing: 0.5px;
         }
         
         .step-pass {
@@ -241,43 +282,62 @@ class ReportService {
         
         .screenshots-section {
             background: white;
-            border-radius: 10px;
+            border-radius: 12px;
             box-shadow: 0 2px 10px rgba(0,0,0,0.1);
             margin-bottom: 30px;
+            overflow: hidden;
         }
         
         .screenshot-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-            gap: 20px;
-            padding: 20px;
+            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+            gap: 25px;
+            padding: 25px;
         }
         
         .screenshot-item {
             text-align: center;
+            background: #f8f9fa;
+            border-radius: 10px;
+            padding: 15px;
+            transition: transform 0.2s ease;
+        }
+        
+        .screenshot-item:hover {
+            transform: scale(1.02);
         }
         
         .screenshot-item img {
             max-width: 100%;
             height: auto;
             border-radius: 8px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+            border: 2px solid #e9ecef;
         }
         
         .screenshot-name {
-            margin-top: 10px;
+            margin-top: 15px;
             font-weight: 600;
             color: #333;
+            font-size: 1rem;
+        }
+        
+        .screenshot-timestamp {
+            margin-top: 5px;
+            color: #666;
+            font-size: 0.9rem;
         }
         
         .logs-section {
             background: white;
-            border-radius: 10px;
+            border-radius: 12px;
             box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            margin-bottom: 30px;
+            overflow: hidden;
         }
         
         .log-content {
-            padding: 20px;
+            padding: 25px;
             max-height: 400px;
             overflow-y: auto;
             font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
@@ -306,22 +366,23 @@ class ReportService {
         
         .metadata-section {
             background: white;
-            border-radius: 10px;
+            border-radius: 12px;
             box-shadow: 0 2px 10px rgba(0,0,0,0.1);
             margin-bottom: 30px;
+            overflow: hidden;
         }
         
         .metadata-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 15px;
-            padding: 20px;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            padding: 25px;
         }
         
         .metadata-item {
             display: flex;
             justify-content: space-between;
-            padding: 10px 0;
+            padding: 15px 0;
             border-bottom: 1px solid #e9ecef;
         }
         
@@ -336,13 +397,25 @@ class ReportService {
         
         .metadata-value {
             color: #333;
+            font-weight: 500;
         }
         
         .footer {
             text-align: center;
-            padding: 30px;
+            padding: 40px;
             color: #666;
             font-size: 0.9rem;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        
+        .footer p {
+            margin-bottom: 10px;
+        }
+        
+        .footer strong {
+            color: #667eea;
         }
     </style>
 </head>
@@ -351,35 +424,35 @@ class ReportService {
         <div class="header">
             <h1>Test Execution Report</h1>
             <p>Test ID: ${id}</p>
-            <div class="status-badge ${result === 'PASS' ? 'status-pass' : 'status-fail'}">
-                ${result}
+            <div class="status-badge ${status === 'PASS' ? 'status-pass' : 'status-fail'}">
+                ${status}
             </div>
         </div>
 
         <div class="summary-grid">
             <div class="summary-card">
                 <h3>Test Case</h3>
-                <div class="value">${testCase}</div>
+                <div class="value">${testCase || 'N/A'}</div>
             </div>
             <div class="summary-card">
                 <h3>Platform</h3>
-                <div class="value">${platform}</div>
+                <div class="value">${platform || 'N/A'}</div>
             </div>
             <div class="summary-card">
                 <h3>Duration</h3>
-                <div class="value">${duration}</div>
+                <div class="value">${formatDuration(duration)}</div>
             </div>
             <div class="summary-card">
                 <h3>Success Rate</h3>
-                <div class="value">${summary.successRate}</div>
+                <div class="value">${summary?.successRate || 'N/A'}</div>
             </div>
             <div class="summary-card">
                 <h3>Total Steps</h3>
-                <div class="value">${summary.totalSteps}</div>
+                <div class="value">${summary?.totalSteps || 0}</div>
             </div>
             <div class="summary-card">
                 <h3>Screenshots</h3>
-                <div class="value">${summary.totalScreenshots}</div>
+                <div class="value">${screenshots?.length || 0}</div>
             </div>
         </div>
 
@@ -387,30 +460,31 @@ class ReportService {
             <div class="section-header">
                 <h2>Test Steps</h2>
             </div>
-            ${steps.map(step => `
+            ${steps && steps.length > 0 ? steps.map((step, index) => `
                 <div class="step-item">
-                    <div class="step-number">${step.step}</div>
+                    <div class="step-number">${index + 1}</div>
                     <div class="step-content">
-                        <div class="step-action">${step.action}</div>
-                        <div class="step-details">Duration: ${step.duration} | Time: ${new Date(step.timestamp).toLocaleTimeString()}</div>
+                        <div class="step-action">${step.name || 'Unknown Step'}</div>
+                        <div class="step-details">Duration: ${formatDuration(step.duration)} | Time: ${new Date(step.timestamp).toLocaleTimeString()}</div>
                     </div>
-                    <div class="step-status ${step.status === 'PASS' ? 'step-pass' : 'step-fail'}">
-                        ${step.status}
+                    <div class="step-status ${step.status === 'passed' ? 'step-pass' : 'step-fail'}">
+                        ${step.status?.toUpperCase() || 'UNKNOWN'}
                     </div>
                 </div>
-            `).join('')}
+            `).join('') : '<div style="padding: 20px; text-align: center; color: #666;">No steps recorded</div>'}
         </div>
 
-        ${screenshots.length > 0 ? `
+        ${screenshots && screenshots.length > 0 ? `
         <div class="screenshots-section">
             <div class="section-header">
-                <h2>Screenshots</h2>
+                <h2>Screenshots (${screenshots.length})</h2>
             </div>
             <div class="screenshot-grid">
                 ${screenshots.map(screenshot => `
                     <div class="screenshot-item">
-                        <img src="${screenshot.path}" alt="${screenshot.name}" />
+                        <img src="${getScreenshotUrl(screenshot.path)}" alt="${screenshot.name}" onerror="this.style.display='none'; this.nextElementSibling.innerHTML='Screenshot not available';" />
                         <div class="screenshot-name">${screenshot.name}</div>
+                        <div class="screenshot-timestamp">${new Date(screenshot.timestamp).toLocaleTimeString()}</div>
                     </div>
                 `).join('')}
             </div>
@@ -419,29 +493,37 @@ class ReportService {
 
         <div class="metadata-section">
             <div class="section-header">
-                <h2>Test Metadata</h2>
+                <h2>Test Details</h2>
             </div>
             <div class="metadata-grid">
                 <div class="metadata-item">
-                    <span class="metadata-label">Device:</span>
-                    <span class="metadata-value">${metadata.device || 'Unknown'}</span>
+                    <span class="metadata-label">Execution ID:</span>
+                    <span class="metadata-value">${report.executionId || 'N/A'}</span>
                 </div>
                 <div class="metadata-item">
-                    <span class="metadata-label">Appium Version:</span>
-                    <span class="metadata-value">${metadata.appiumVersion || 'Unknown'}</span>
+                    <span class="metadata-label">Start Time:</span>
+                    <span class="metadata-value">${new Date(report.startTime || timestamp).toLocaleString()}</span>
                 </div>
                 <div class="metadata-item">
-                    <span class="metadata-label">Test Environment:</span>
-                    <span class="metadata-value">${metadata.testEnvironment || 'QA'}</span>
+                    <span class="metadata-label">End Time:</span>
+                    <span class="metadata-value">${new Date(report.endTime || timestamp).toLocaleString()}</span>
                 </div>
                 <div class="metadata-item">
-                    <span class="metadata-label">Execution Time:</span>
-                    <span class="metadata-value">${new Date(timestamp).toLocaleString()}</span>
+                    <span class="metadata-label">Total Duration:</span>
+                    <span class="metadata-value">${formatDuration(duration)}</span>
+                </div>
+                <div class="metadata-item">
+                    <span class="metadata-label">Passed Steps:</span>
+                    <span class="metadata-value">${summary?.passedSteps || 0}</span>
+                </div>
+                <div class="metadata-item">
+                    <span class="metadata-label">Failed Steps:</span>
+                    <span class="metadata-value">${summary?.failedSteps || 0}</span>
                 </div>
             </div>
         </div>
 
-        ${logs.length > 0 ? `
+        ${logs && logs.length > 0 ? `
         <div class="logs-section">
             <div class="section-header">
                 <h2>Execution Logs</h2>
@@ -466,8 +548,8 @@ class ReportService {
         ` : ''}
 
         <div class="footer">
-            <p>Report generated by Autosana Test Automation Platform</p>
-            <p>Generated on ${new Date().toLocaleString()}</p>
+            <p><strong>© 2024 Testkami</strong> - AI-Powered Test Automation Platform</p>
+            <p>Report generated on ${new Date().toLocaleString()}</p>
         </div>
     </div>
 </body>

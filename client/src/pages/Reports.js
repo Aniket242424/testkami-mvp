@@ -1,24 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { 
-  Search, 
-  Download, 
-  Eye, 
-  Mail, 
-  RefreshCw,
-  CheckCircle,
-  XCircle,
-  Clock,
-  FileText,
-  Zap
-} from 'lucide-react';
-import toast from 'react-hot-toast';
-import axios from 'axios';
 
 const Reports = () => {
   const [reports, setReports] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [statusFilter, setStatusFilter] = useState('');
+  const [selectedReport, setSelectedReport] = useState(null);
+  const [showDetails, setShowDetails] = useState(false);
 
   useEffect(() => {
     fetchReports();
@@ -27,263 +13,233 @@ const Reports = () => {
   const fetchReports = async () => {
     try {
       setLoading(true);
-      const response = await axios.get('/api/reports/list');
-      setReports(response.data.reports || []);
+      const response = await fetch('/api/reports/list');
+      const data = await response.json();
+      
+      if (data.success) {
+        setReports(data.reports);
+      } else {
+        console.error('Failed to fetch reports:', data.message);
+      }
     } catch (error) {
-      console.error('Failed to fetch reports:', error);
-      toast.error('Failed to load reports');
+      console.error('Error fetching reports:', error);
     } finally {
       setLoading(false);
     }
   };
 
-  const sendEmailReport = async (testId) => {
-    try {
-      await axios.post(`/api/reports/send-email/${testId}`);
-      toast.success('Email report sent successfully');
-    } catch (error) {
-      console.error('Failed to send email report:', error);
-      toast.error('Failed to send email report');
-    }
+  const viewReport = (report) => {
+    setSelectedReport(report);
+    setShowDetails(true);
   };
 
-  const downloadReport = async (testId) => {
+  const openReportInNewTab = (reportId) => {
+    // Open the HTML report in a new tab using the backend server URL
+    window.open(`http://localhost:5000/reports/${reportId}.html`, '_blank');
+  };
+
+  const deleteReport = async (reportId) => {
+    if (!window.confirm('Are you sure you want to delete this report?')) {
+      return;
+    }
+
     try {
-      const response = await axios.get(`/api/reports/download/${testId}`, {
-        responseType: 'blob'
+      const response = await fetch(`/api/reports/${reportId}`, {
+        method: 'DELETE'
       });
+      const data = await response.json();
       
-      const url = window.URL.createObjectURL(new Blob([response.data]));
-      const link = document.createElement('a');
-      link.href = url;
-      link.setAttribute('download', `test-report-${testId}.json`);
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      
-      toast.success('Report downloaded successfully');
+      if (data.success) {
+        fetchReports(); // Refresh the list
+      } else {
+        console.error('Failed to delete report:', data.message);
+      }
     } catch (error) {
-      console.error('Failed to download report:', error);
-      toast.error('Failed to download report');
+      console.error('Error deleting report:', error);
     }
   };
-
-  const getStatusIcon = (status) => {
-    switch (status) {
-      case 'PASS':
-        return <CheckCircle className="h-5 w-5 text-success-500" />;
-      case 'FAIL':
-        return <XCircle className="h-5 w-5 text-error-500" />;
-      case 'RUNNING':
-        return <Clock className="h-5 w-5 text-warning-500 animate-pulse" />;
-      default:
-        return <Clock className="h-5 w-5 text-gray-400" />;
-    }
-  };
-
-  const filteredReports = reports.filter(report => {
-    const matchesSearch = report.testCase.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         report.id.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesStatus = !statusFilter || report.result === statusFilter;
-    
-    return matchesSearch && matchesStatus;
-  });
 
   const formatDuration = (duration) => {
     if (!duration) return 'N/A';
-    return duration;
+    const seconds = Math.floor(duration / 1000);
+    const minutes = Math.floor(seconds / 60);
+    if (minutes > 0) {
+      return `${minutes}m ${seconds % 60}s`;
+    }
+    return `${seconds}s`;
   };
 
-  const formatTimestamp = (timestamp) => {
-    return new Date(timestamp).toLocaleString();
+  const formatDate = (dateString) => {
+    return new Date(dateString).toLocaleString();
+  };
+
+  const getStatusIcon = (status) => {
+    if (status === 'PASS') {
+      return <span className="text-green-500">✅</span>;
+    } else if (status === 'FAIL') {
+      return <span className="text-red-500">❌</span>;
+    }
+    return <span className="text-yellow-500">⏳</span>;
   };
 
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600"></div>
+        <div className="text-lg">Loading reports...</div>
       </div>
     );
   }
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Test Reports</h1>
-          <p className="mt-1 text-sm text-gray-500">
-            View and manage detailed test execution reports
-          </p>
-        </div>
+    <div className="p-6">
+      <div className="flex justify-between items-center mb-6">
+        <h1 className="text-2xl font-bold text-gray-800">Test Reports</h1>
         <button
           onClick={fetchReports}
-          className="btn-secondary"
+          className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
         >
-          <RefreshCw className="h-4 w-4 mr-2" />
           Refresh
         </button>
       </div>
 
-      {/* Filters */}
-      <div className="card">
-        <div className="card-body">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {/* Search */}
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
-              <input
-                type="text"
-                placeholder="Search reports..."
-                className="input pl-10"
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-              />
-            </div>
+      {reports.length === 0 ? (
+        <div className="text-center py-12">
+          <div className="text-gray-500 text-lg mb-2">No reports found</div>
+          <div className="text-gray-400">Run some tests to generate reports</div>
+        </div>
+      ) : (
+        <div className="grid gap-4">
+          {reports.map((report) => (
+            <div
+              key={report.id}
+              className="bg-white border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow"
+            >
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-4">
+                  {getStatusIcon(report.status)}
+                  <div>
+                    <h3 className="font-semibold text-gray-800">
+                      Test Execution {report.id.slice(0, 8)}
+                    </h3>
+                    <p className="text-sm text-gray-500">
+                      {formatDate(report.timestamp)}
+                    </p>
+                  </div>
+                </div>
+                
+                <div className="flex items-center space-x-2">
+                  <span className={`px-2 py-1 rounded text-xs font-medium ${
+                    report.status === 'PASS' 
+                      ? 'bg-green-100 text-green-800' 
+                      : report.status === 'FAIL'
+                      ? 'bg-red-100 text-red-800'
+                      : 'bg-yellow-100 text-yellow-800'
+                  }`}>
+                    {report.status}
+                  </span>
+                  <span className="text-sm text-gray-500">
+                    {formatDuration(report.duration)}
+                  </span>
+                </div>
+              </div>
 
-            {/* Status Filter */}
-            <div>
-              <select
-                className="input"
-                value={statusFilter}
-                onChange={(e) => setStatusFilter(e.target.value)}
+              <div className="mt-3 flex items-center space-x-2">
+                <button
+                  onClick={() => openReportInNewTab(report.id)}
+                  className="px-3 py-1 bg-blue-500 text-white text-sm rounded hover:bg-blue-600"
+                >
+                  View Report
+                </button>
+                <button
+                  onClick={() => viewReport(report)}
+                  className="px-3 py-1 bg-gray-500 text-white text-sm rounded hover:bg-gray-600"
+                >
+                  Details
+                </button>
+                <button
+                  onClick={() => deleteReport(report.id)}
+                  className="px-3 py-1 bg-red-500 text-white text-sm rounded hover:bg-red-600"
+                >
+                  Delete
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Report Details Modal */}
+      {showDetails && selectedReport && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 max-w-2xl w-full mx-4 max-h-[80vh] overflow-y-auto">
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-xl font-bold">Report Details</h2>
+              <button
+                onClick={() => setShowDetails(false)}
+                className="text-gray-500 hover:text-gray-700"
               >
-                <option value="">All Results</option>
-                <option value="PASS">Passed</option>
-                <option value="FAIL">Failed</option>
-              </select>
+                ✕
+              </button>
             </div>
 
-            {/* Results Count */}
-            <div className="flex items-center justify-end">
-              <span className="text-sm text-gray-500">
-                {filteredReports.length} of {reports.length} reports
-              </span>
-            </div>
-          </div>
-        </div>
-      </div>
+            <div className="space-y-4">
+              <div>
+                <h3 className="font-semibold">Test Information</h3>
+                <p><strong>ID:</strong> {selectedReport.id}</p>
+                <p><strong>Status:</strong> {selectedReport.status}</p>
+                <p><strong>Duration:</strong> {formatDuration(selectedReport.duration)}</p>
+                <p><strong>Timestamp:</strong> {formatDate(selectedReport.timestamp)}</p>
+              </div>
 
-      {/* Reports List */}
-      <div className="card">
-        <div className="card-body">
-          {filteredReports.length === 0 ? (
-            <div className="text-center py-12">
-              <FileText className="mx-auto h-12 w-12 text-gray-300 mb-4" />
-              <h3 className="text-lg font-medium text-gray-900 mb-2">No reports found</h3>
-              <p className="text-gray-500">
-                {reports.length === 0 ? 'No test reports available yet.' : 'No reports match your filters.'}
-              </p>
-            </div>
-          ) : (
-            <div className="overflow-hidden">
-              <table className="min-w-full divide-y divide-gray-200">
-                <thead className="bg-gray-50">
-                  <tr>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Test Case
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Platform
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Result
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Duration
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Generated
-                    </th>
-                    <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Actions
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="bg-white divide-y divide-gray-200">
-                  {filteredReports.map((report) => (
-                    <tr key={report.id} className="hover:bg-gray-50">
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="flex items-center">
-                          <div className="flex-shrink-0">
-                            {getStatusIcon(report.result)}
-                          </div>
-                          <div className="ml-4">
-                            <div className="text-sm font-medium text-gray-900">
-                              {report.testCase}
-                            </div>
-                            <div className="text-sm text-gray-500">
-                              ID: {report.id}
-                            </div>
-                          </div>
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <span className="text-sm text-gray-900 capitalize">
-                          {report.platform}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <span className={`status-badge ${
-                          report.result === 'PASS' ? 'status-pass' : 'status-fail'
-                        }`}>
-                          {report.result}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        {formatDuration(report.duration)}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        {formatTimestamp(report.timestamp)}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                        <div className="flex items-center justify-end space-x-2">
-                          <button
-                            onClick={() => sendEmailReport(report.id)}
-                            className="text-primary-600 hover:text-primary-900"
-                            title="Send Email Report"
-                          >
-                            <Mail className="h-4 w-4" />
-                          </button>
-                          <button
-                            onClick={() => downloadReport(report.id)}
-                            className="text-gray-600 hover:text-gray-900"
-                            title="Download Report"
-                          >
-                            <Download className="h-4 w-4" />
-                          </button>
-                          <button
-                            className="text-gray-600 hover:text-gray-900"
-                            title="View Details"
-                          >
-                            <Eye className="h-4 w-4" />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-      </div>
+              {selectedReport.steps && selectedReport.steps.length > 0 && (
+                <div>
+                  <h3 className="font-semibold">Test Steps</h3>
+                  <div className="space-y-2">
+                    {selectedReport.steps.map((step, index) => (
+                      <div key={index} className="border-l-4 border-gray-200 pl-3">
+                        <p className="font-medium">{step.name}</p>
+                        <p className="text-sm text-gray-500">
+                          Status: {step.status} | Duration: {formatDuration(step.duration)}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
-      {/* Pagination */}
-      {filteredReports.length > 0 && (
-        <div className="flex items-center justify-between">
-          <div className="text-sm text-gray-700">
-            Showing <span className="font-medium">1</span> to{' '}
-            <span className="font-medium">{filteredReports.length}</span> of{' '}
-            <span className="font-medium">{reports.length}</span> results
-          </div>
-          <div className="flex space-x-2">
-            <button className="btn-secondary px-3 py-2 text-sm">
-              Previous
-            </button>
-            <button className="btn-secondary px-3 py-2 text-sm">
-              Next
-            </button>
+              {selectedReport.screenshots && selectedReport.screenshots.length > 0 && (
+                <div>
+                  <h3 className="font-semibold">Screenshots ({selectedReport.screenshots.length})</h3>
+                  <div className="grid grid-cols-2 gap-2">
+                    {selectedReport.screenshots.map((screenshot, index) => (
+                      <div key={index} className="text-center">
+                        <img
+                          src={`http://localhost:5000/reports/screenshots/${screenshot.path.split('/').pop()}`}
+                          alt={screenshot.name}
+                          className="w-full h-32 object-cover rounded border"
+                        />
+                        <p className="text-xs text-gray-500 mt-1">{screenshot.name}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="flex justify-end space-x-2">
+                <button
+                  onClick={() => openReportInNewTab(selectedReport.id)}
+                  className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
+                >
+                  Open Full Report
+                </button>
+                <button
+                  onClick={() => setShowDetails(false)}
+                  className="px-4 py-2 bg-gray-500 text-white rounded hover:bg-gray-600"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

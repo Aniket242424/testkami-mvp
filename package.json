@@ -9,7 +9,10 @@
     "client": "cd client && npm start",
     "build": "cd client && npm run build",
     "install-all": "npm install && cd server && npm install && cd ../client && npm install",
-    "start": "cd server && npm start"
+    "start": "cd server && npm run dev",
+    "start-prod": "cd server && npm start",
+    "configure-avd": "node configure-avd.js",
+    "list-avds": "node -e \"require('./server/utils/avdHelper').listAvailableAVDs().then(console.log)\""
   },
   "keywords": ["test-automation", "appium", "ai", "qa", "mobile-testing"],
   "author": "Autosana MVP Team",

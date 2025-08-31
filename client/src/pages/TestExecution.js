@@ -107,42 +107,74 @@ const TestExecution = () => {
 
     try {
       setIsExecuting(true);
+      
+      // Step 1: Initializing
       setExecutionStatus({
         status: 'initializing',
-        message: 'Initializing test execution...',
-        progress: 0
+        message: '🤖 Generating test script from natural language...',
+        progress: 10
       });
 
       const testData = {
-        testCase: testCase.trim(),
+        naturalLanguageTest: testCase.trim(),
         platform: platform,
-        appPath: platform === 'web' ? webUrl : appPath,
-        deviceConfig: {
-          platformName: platform === 'android' ? 'Android' : platform === 'ios' ? 'iOS' : 'Chrome',
-          automationName: platform === 'android' ? 'UiAutomator2' : platform === 'ios' ? 'XCUITest' : 'chromedriver'
-        }
+        appPath: platform === 'web' ? webUrl : appPath
       };
+
+      // Step 2: Starting emulator
+      setTimeout(() => {
+        setExecutionStatus(prev => ({
+          ...prev,
+          message: '📱 Starting emulator and launching app...',
+          progress: 30
+        }));
+      }, 2000);
+
+      // Step 3: Executing test
+      setTimeout(() => {
+        setExecutionStatus(prev => ({
+          ...prev,
+          message: '🧪 Executing test script on emulator...',
+          progress: 60
+        }));
+      }, 5000);
+
+      // Step 4: Generating report
+      setTimeout(() => {
+        setExecutionStatus(prev => ({
+          ...prev,
+          message: '📊 Generating comprehensive report...',
+          progress: 80
+        }));
+      }, 8000);
 
       const response = await axios.post('/api/tests/execute', testData);
       
       if (response.data.success) {
         setExecutionStatus({
           status: 'completed',
-          message: 'Test execution completed successfully',
+          message: '✅ Test execution completed successfully!',
           progress: 100,
-          testId: response.data.testId,
-          report: response.data.report
+          executionId: response.data.executionId,
+          report: response.data.report,
+          summary: response.data.summary,
+          htmlReportUrl: response.data.htmlReportUrl
         });
-        toast.success('Test executed successfully!');
+        toast.success('Test executed successfully! Check the Reports page for detailed results.');
+        
+        // Redirect to reports page after 2 seconds
+        setTimeout(() => {
+          window.location.href = '/reports';
+        }, 2000);
       } else {
-        throw new Error(response.data.message || 'Test execution failed');
+        throw new Error(response.data.error || 'Test execution failed');
       }
 
     } catch (error) {
       console.error('Test execution error:', error);
       setExecutionStatus({
         status: 'failed',
-        message: error.response?.data?.message || error.message,
+        message: `❌ ${error.response?.data?.error || error.message}`,
         progress: 0
       });
       toast.error('Test execution failed');
@@ -410,11 +442,35 @@ const TestExecution = () => {
                     </div>
                   )}
 
-                  {executionStatus.status === 'completed' && executionStatus.testId && (
-                    <div className="mt-4 p-3 bg-success-50 border border-success-200 rounded-lg">
-                      <p className="text-sm text-success-700">
-                        Test ID: <span className="font-mono">{executionStatus.testId}</span>
-                      </p>
+                  {executionStatus.status === 'completed' && (
+                    <div className="mt-4 space-y-3">
+                      <div className="p-3 bg-success-50 border border-success-200 rounded-lg">
+                        <p className="text-sm text-success-700">
+                          Execution ID: <span className="font-mono">{executionStatus.executionId}</span>
+                        </p>
+                      </div>
+                      
+                      {executionStatus.summary && (
+                        <div className="grid grid-cols-2 gap-2 text-xs">
+                          <div className="p-2 bg-blue-50 rounded">
+                            <p className="font-medium text-blue-700">Steps</p>
+                            <p className="text-blue-600">{executionStatus.summary.steps}</p>
+                          </div>
+                          <div className="p-2 bg-green-50 rounded">
+                            <p className="font-medium text-green-700">Screenshots</p>
+                            <p className="text-green-600">{executionStatus.summary.screenshots}</p>
+                          </div>
+                        </div>
+                      )}
+                      
+                      {executionStatus.htmlReportUrl && (
+                        <button
+                          onClick={() => window.open(executionStatus.htmlReportUrl, '_blank')}
+                          className="w-full p-2 bg-primary-50 border border-primary-200 rounded-lg text-primary-700 hover:bg-primary-100 transition-colors"
+                        >
+                          📊 View Detailed Report
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>

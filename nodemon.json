@@ -1,0 +1,28 @@
+{
+  "watch": [
+    "server/**/*.js",
+    "server/**/*.json",
+    "server/**/*.env"
+  ],
+  "ignore": [
+    "node_modules/**/*",
+    "client/**/*",
+    "logs/**/*",
+    "reports/**/*",
+    "uploads/**/*",
+    "*.log"
+  ],
+  "ext": "js,json,env",
+  "env": {
+    "NODE_ENV": "development"
+  },
+  "delay": "1000",
+  "verbose": true,
+  "colours": true,
+  "restartable": "rs",
+  "legacyWatch": true,
+  "events": {
+    "restart": "echo '🔄 Server restarted due to changes'",
+    "crash": "echo '💥 Server crashed, restarting...'"
+  }
+}

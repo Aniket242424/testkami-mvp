@@ -28,22 +28,14 @@ const storage = multer.diskStorage({
 
 // File filter function
 const fileFilter = (req, file, cb) => {
-  const { platform } = req.body;
-  
   // Get file extension
   const extension = path.extname(file.originalname).toLowerCase();
   
-  // Validate file type based on platform
-  if (platform === 'android') {
-    if (extension !== '.apk') {
-      return cb(new Error('Only APK files are allowed for Android platform'), false);
-    }
-  } else if (platform === 'ios') {
-    if (extension !== '.ipa') {
-      return cb(new Error('Only IPA files are allowed for iOS platform'), false);
-    }
-  } else {
-    return cb(new Error('Invalid platform specified'), false);
+  // Accept common mobile app file types
+  const allowedExtensions = ['.apk', '.ipa'];
+  
+  if (!allowedExtensions.includes(extension)) {
+    return cb(new Error('Only APK and IPA files are allowed'), false);
   }
   
   cb(null, true);
@@ -85,18 +77,10 @@ const handleUploadError = (error, req, res, next) => {
     });
   }
   
-  if (error.message.includes('Only APK files') || error.message.includes('Only IPA files')) {
+  if (error.message.includes('Only APK and IPA files are allowed')) {
     return res.status(400).json({
       success: false,
       error: 'Invalid file type',
-      message: error.message
-    });
-  }
-  
-  if (error.message.includes('Invalid platform')) {
-    return res.status(400).json({
-      success: false,
-      error: 'Invalid platform',
       message: error.message
     });
   }

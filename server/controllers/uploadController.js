@@ -5,6 +5,9 @@ const fs = require('fs-extra');
 // In-memory storage for uploaded files (in production, use a database)
 const uploadedFiles = new Map();
 
+// Export the uploadedFiles Map so other services can access it
+module.exports.uploadedFiles = uploadedFiles;
+
 class UploadController {
   // Upload app binary (APK/IPA)
   async uploadApp(req, res) {
@@ -320,4 +323,15 @@ class UploadController {
   }
 }
 
-module.exports = new UploadController();
+const uploadController = new UploadController();
+
+// Export both the controller methods and the uploadedFiles Map
+module.exports = {
+  uploadApp: uploadController.uploadApp.bind(uploadController),
+  uploadWebUrl: uploadController.uploadWebUrl.bind(uploadController),
+  getUploadedFiles: uploadController.getUploadedFiles.bind(uploadController),
+  deleteFile: uploadController.deleteFile.bind(uploadController),
+  validateApp: uploadController.validateApp.bind(uploadController),
+  getSupportedFormats: uploadController.getSupportedFormats.bind(uploadController),
+  uploadedFiles: uploadedFiles
+};

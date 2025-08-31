@@ -1,256 +1,390 @@
-const axios = require('axios');
-const { v4: uuidv4 } = require('uuid');
-const path = require('path');
+const { remote } = require('webdriverio');
+const { exec } = require('child_process');
 const fs = require('fs-extra');
+const path = require('path');
+const { promisify } = require('util');
+
+const execAsync = promisify(exec);
 
 class AppiumService {
   constructor() {
-    this.appiumUrl = process.env.APPIUM_MCP_URL || 'http://localhost:4723';
-    this.sessions = new Map();
+    this.driver = null;
+    this.emulatorProcess = null;
+    this.screenshotsDir = path.join(__dirname, '../../reports/screenshots');
+    
+    // Emulator configuration
+    this.avdName = 'Manastik_Medico';
+    this.appiumServerUrl = 'http://localhost:4723';
+    
+    // Ensure screenshots directory exists
+    fs.ensureDirSync(this.screenshotsDir);
   }
 
-  async executeTest(testScript, platform) {
+  async startEmulatorAndLaunchApp(appPath) {
+    console.log('🚀 STARTING EMULATOR AND APP AUTOMATION...');
+    
     try {
-      console.log(`🚀 Executing test via Appium MCP: ${platform}`);
+      // Step 1: Start emulator
+      console.log('📱 Step 1: Starting emulator...');
+      const emulatorStarted = await this.startEmulator();
       
-      const sessionId = uuidv4();
-      const startTime = Date.now();
+      if (!emulatorStarted) {
+        throw new Error('Failed to start emulator - emulator did not start within timeout');
+      }
       
-      // Initialize session
-      this.sessions.set(sessionId, {
-        id: sessionId,
-        platform: platform,
-        status: 'initializing',
-        startTime: startTime,
-        logs: []
-      });
-
-      // Step 1: Create session
-      await this.createSession(sessionId, platform);
+      // Step 2: Initialize Appium driver with the app
+      console.log('📱 Step 2: Initializing Appium driver...');
+      await this.initializeDriver(appPath);
       
-      // Step 2: Execute test script
-      const testResults = await this.runTestScript(sessionId, testScript);
+      console.log('✅ Emulator and app launched successfully');
       
-      // Step 3: Capture results and cleanup
-      const endTime = Date.now();
-      const duration = (endTime - startTime) / 1000;
-      
-      const results = {
-        sessionId: sessionId,
-        platform: platform,
-        status: testResults.success ? 'PASS' : 'FAIL',
-        duration: `${duration.toFixed(1)}s`,
-        startTime: new Date(startTime).toISOString(),
-        endTime: new Date(endTime).toISOString(),
-        steps: testResults.steps || [],
-        screenshots: testResults.screenshots || [],
-        logs: testResults.logs || [],
-        error: testResults.error || null,
-        metadata: {
-          device: this.getDeviceInfo(platform),
-          appiumVersion: await this.getAppiumVersion(),
-          testEnvironment: 'QA'
-        }
+      return {
+        driver: this.driver,
+        emulatorStarted: true,
+        appPath: appPath
       };
-
-      // Update session status
-      this.sessions.set(sessionId, {
-        ...this.sessions.get(sessionId),
-        status: 'completed',
-        results: results
-      });
-
-      console.log(`✅ Test execution completed: ${results.status} (${results.duration})`);
       
-      return results;
-
     } catch (error) {
-      console.error('Appium service error:', error);
-      
-      // Return mock results if Appium is not available
-      if (error.code === 'ECONNREFUSED' || error.code === 'ENOTFOUND') {
-        console.warn('Appium MCP server not available, using mock results');
-        return this.getMockTestResults(platform);
-      }
-      
-      throw new Error(`Test execution failed: ${error.message}`);
+      console.error('❌ Emulator and app launch failed:', error);
+      throw error;
     }
   }
 
-  async createSession(sessionId, platform) {
+  async startEmulator() {
     try {
-      const capabilities = this.getCapabilities(platform);
+      console.log('🔄 Starting Android emulator...');
       
-      const response = await axios.post(`${this.appiumUrl}/session`, {
-        capabilities: capabilities
-      }, {
-        timeout: 30000,
-        headers: {
-          'Content-Type': 'application/json'
+      // Check if emulator is already running
+      const isRunning = await this.checkEmulatorStatus();
+      if (isRunning) {
+        console.log('✅ Emulator is already running and connected');
+        return true;
+      }
+
+      // Check if emulator process is already running
+      const isProcessRunning = await this.checkEmulatorProcess();
+      if (isProcessRunning) {
+        console.log('✅ Emulator process is already running, waiting for it to connect...');
+        await this.waitForEmulatorBoot();
+        return true;
+      }
+
+      // Force start emulator if not detected
+      console.log('🚀 Force starting emulator since it was not detected...');
+
+      // Build emulator command with configuration options for visible GUI
+      const options = {
+        memory: 4096,
+        cores: 4
+      };
+      const emulatorArgs = [
+        `-avd ${this.avdName}`,
+        '-gpu host', // Use host GPU for better performance
+        '-no-audio', // Disable audio to avoid issues
+        '-no-snapshot-load', // Don't load snapshot for fresh start
+        '-no-boot-anim', // Skip boot animation for faster startup
+        `-memory ${options.memory}`,
+        `-cores ${options.cores}`,
+        '-skin 1080x1920', // Set screen size
+        '-show-kernel', // Show kernel messages
+        '-verbose' // Verbose output for debugging
+      ].filter(arg => arg !== '').join(' ');
+      
+      const emulatorCommand = `emulator ${emulatorArgs}`;
+      console.log(`🚀 Starting emulator with command: ${emulatorCommand}`);
+      
+      // Start emulator with visible GUI
+      this.emulatorProcess = exec(emulatorCommand, {
+        windowsHide: false, // Make sure emulator window is visible
+        detached: false // Keep process attached so we can monitor it
+      }, (error, stdout, stderr) => {
+        if (error) {
+          console.error('❌ Emulator start error:', error);
+        }
+        if (stderr) {
+          console.log('Emulator stderr:', stderr);
+        }
+        if (stdout) {
+          console.log('Emulator stdout:', stdout);
         }
       });
 
-      const session = response.data;
-      console.log(`📱 Appium session created: ${session.sessionId}`);
+      // Wait for emulator to boot
+      console.log('⏳ Waiting for emulator to boot...');
+      await this.waitForEmulatorBoot();
       
-      // Update session info
-      this.sessions.set(sessionId, {
-        ...this.sessions.get(sessionId),
-        appiumSessionId: session.sessionId,
-        status: 'session_created'
-      });
-
-      return session;
+      console.log('✅ Emulator started successfully');
+      return true;
 
     } catch (error) {
-      console.error('Session creation error:', error);
-      throw new Error(`Failed to create Appium session: ${error.message}`);
+      console.error('❌ Failed to start emulator:', error);
+      throw new Error(`Emulator startup failed: ${error.message}`);
     }
   }
 
-  async runTestScript(sessionId, testScript) {
+  async checkEmulatorStatus() {
     try {
-      const session = this.sessions.get(sessionId);
-      if (!session || !session.appiumSessionId) {
-        throw new Error('No active Appium session found');
+      const { stdout } = await execAsync('adb devices');
+      console.log('📱 Raw ADB devices output:', stdout);
+      
+      const lines = stdout.trim().split('\n');
+      console.log('📱 ADB lines:', lines);
+      
+      // Check if there are any devices (more than just the header)
+      const hasDevices = lines.length > 1 && lines.some(line => line.includes('device') && !line.includes('List of devices'));
+      
+      console.log('📱 Has devices:', hasDevices);
+      console.log('📱 Number of lines:', lines.length);
+      
+      // Additional check: try to get device info
+      if (hasDevices) {
+        try {
+          const { stdout: deviceInfo } = await execAsync('adb shell getprop ro.product.model');
+          console.log('📱 Device model:', deviceInfo.trim());
+        } catch (deviceError) {
+          console.log('📱 Could not get device info (normal during startup)');
+        }
       }
-
-      // Update status
-      this.sessions.set(sessionId, {
-        ...session,
-        status: 'executing'
-      });
-
-      // Execute the test script
-      const results = await this.executeScriptSteps(session.appiumSessionId, testScript);
       
-      return results;
-
+      return hasDevices;
     } catch (error) {
-      console.error('Script execution error:', error);
-      throw new Error(`Failed to execute test script: ${error.message}`);
+      console.error('❌ Error checking emulator status:', error);
+      return false;
     }
   }
 
-  async executeScriptSteps(appiumSessionId, testScript) {
-    const steps = [];
-    const screenshots = [];
-    const logs = [];
-    let success = true;
-    let error = null;
-
+  async checkEmulatorProcess() {
     try {
-      // Parse and execute test script
+      const { stdout } = await execAsync('tasklist /FI "IMAGENAME eq emulator.exe" /FO CSV');
+      const hasProcess = stdout.includes('emulator.exe');
+      console.log('🔍 Emulator process check:', hasProcess ? 'Found' : 'Not found');
+      return hasProcess;
+    } catch (error) {
+      console.error('❌ Error checking emulator process:', error);
+      return false;
+    }
+  }
+
+  async waitForEmulatorBoot() {
+    const timeouts = {
+      bootTimeout: 120000, // 2 minutes
+      checkInterval: 2000
+    };
+    
+    console.log(`⏳ Waiting up to ${timeouts.bootTimeout / 1000} seconds for emulator to boot...`);
+    
+    const startTime = Date.now();
+    
+    while (Date.now() - startTime < timeouts.bootTimeout) {
+      try {
+        const { stdout } = await execAsync('adb shell getprop sys.boot_completed');
+        
+        if (stdout.trim() === '1') {
+          console.log('✅ Emulator boot completed');
+          
+          // Additional wait for system to be fully ready
+          await new Promise(resolve => setTimeout(resolve, 5000));
+          
+          // Verify app launch capability
+          try {
+            const { stdout: activityOutput } = await execAsync('adb shell dumpsys activity activities | grep mResumedActivity');
+            console.log('📱 Current activity:', activityOutput.trim());
+          } catch (activityError) {
+            console.log('📱 Activity check failed (normal during boot):', activityError.message);
+          }
+          
+          return true;
+        }
+        
+        console.log('⏳ Emulator still booting...');
+        await new Promise(resolve => setTimeout(resolve, timeouts.checkInterval));
+        
+      } catch (error) {
+        console.log('⏳ Waiting for emulator to be ready...');
+        await new Promise(resolve => setTimeout(resolve, timeouts.checkInterval));
+      }
+    }
+    
+    throw new Error('Emulator boot timeout exceeded - emulator did not start within 2 minutes');
+  }
+
+  async initializeDriver(appPath) {
+    try {
+      console.log('🔧 Initializing Appium driver...');
+      console.log('📱 App path:', appPath);
+      
+      // Verify app file exists
+      if (!fs.existsSync(appPath)) {
+        throw new Error(`APK file not found at path: ${appPath}`);
+      }
+      
+      const capabilities = {
+        platformName: 'Android',
+        'appium:automationName': 'UiAutomator2',
+        'appium:deviceName': 'Android Emulator',
+        'appium:app': appPath,
+        'appium:noReset': false,
+        'appium:newCommandTimeout': 60,
+        'appium:autoGrantPermissions': true,
+        'appium:skipServerInstallation': false,
+        'appium:skipDeviceInitialization': false
+      };
+      
+      console.log('🔧 Appium capabilities:', JSON.stringify(capabilities, null, 2));
+      
+      this.driver = await remote({
+        hostname: 'localhost',
+        port: 4723,
+        path: '/wd/hub',
+        capabilities: capabilities,
+        logLevel: 'info'
+      });
+      
+      console.log('✅ Appium driver initialized successfully');
+      console.log('📱 Session ID:', this.driver.sessionId);
+      
+      // Verify app launch
+      const currentActivity = await this.driver.getCurrentActivity();
+      const currentPackage = await this.driver.getCurrentPackage();
+      
+      console.log('📱 Current activity:', currentActivity);
+      console.log('📱 Current package:', currentPackage);
+      
+      return this.driver;
+      
+    } catch (error) {
+      console.error('❌ Failed to initialize Appium driver:', error);
+      throw new Error(`Appium driver initialization failed: ${error.message}`);
+    }
+  }
+
+  async executeTestScript(testScript, driver, executionId) {
+    try {
+      console.log('🧪 Executing test script...');
+      
+      const steps = [];
+      const screenshots = [];
+      let passedSteps = 0;
+      let failedSteps = 0;
+      
+      // Parse the test script
       const scriptSteps = this.parseTestScript(testScript);
+      
+      if (scriptSteps.length === 0) {
+        throw new Error('No test steps found in the generated script');
+      }
       
       for (let i = 0; i < scriptSteps.length; i++) {
         const step = scriptSteps[i];
+        const stepStartTime = Date.now();
         
         try {
           console.log(`Step ${i + 1}: ${step.action}`);
           
-          // Execute step
-          await this.executeStep(appiumSessionId, step);
+          // Execute the step
+          await this.executeStep(driver, step);
           
-          // Take screenshot if specified
-          if (step.screenshot) {
-            const screenshotPath = await this.takeScreenshot(appiumSessionId, `step_${i + 1}`);
-            screenshots.push({
-              id: `screenshot-${i + 1}`,
-              name: step.action,
-              path: screenshotPath,
-              timestamp: new Date().toISOString()
-            });
-          }
+          // Take screenshot
+          const screenshotPath = await this.takeScreenshot(`step_${i + 1}_${step.action.replace(/\s+/g, '_')}`);
+          screenshots.push(screenshotPath);
           
-          // Record step result
+          const stepDuration = Date.now() - stepStartTime;
+          
           steps.push({
             step: i + 1,
             action: step.action,
             status: 'PASS',
-            duration: step.duration || '1.0s',
-            timestamp: new Date().toISOString()
+            duration: stepDuration,
+            timestamp: new Date().toISOString(),
+            screenshot: screenshotPath
           });
           
-          logs.push(`✅ Step ${i + 1} completed: ${step.action}`);
+          passedSteps++;
+          console.log(`✅ Step ${i + 1} completed successfully`);
           
         } catch (stepError) {
-          console.error(`Step ${i + 1} failed:`, stepError.message);
+          const stepDuration = Date.now() - stepStartTime;
           
           steps.push({
             step: i + 1,
             action: step.action,
             status: 'FAIL',
-            duration: step.duration || '1.0s',
+            duration: stepDuration,
             timestamp: new Date().toISOString(),
             error: stepError.message
           });
           
-          logs.push(`❌ Step ${i + 1} failed: ${stepError.message}`);
-          success = false;
-          error = stepError.message;
-          break;
+          failedSteps++;
+          console.error(`❌ Step ${i + 1} failed:`, stepError.message);
+          
+          // Take error screenshot
+          const errorScreenshotPath = await this.takeScreenshot(`error_step_${i + 1}_${step.action.replace(/\s+/g, '_')}`);
+          screenshots.push(errorScreenshotPath);
         }
       }
-
+      
+      const summary = {
+        totalSteps: steps.length,
+        passedSteps,
+        failedSteps,
+        screenshots: screenshots.length
+      };
+      
+      return {
+        steps,
+        screenshots,
+        summary
+      };
+      
     } catch (error) {
-      success = false;
-      error = error.message;
-      logs.push(`❌ Test execution failed: ${error}`);
+      console.error('❌ Test script execution failed:', error);
+      throw new Error(`Test execution failed: ${error.message}`);
     }
-
-    return {
-      success,
-      steps,
-      screenshots,
-      logs,
-      error
-    };
   }
 
-  async executeStep(appiumSessionId, step) {
-    // Mock step execution - in real implementation, this would call Appium commands
+  async executeStep(driver, step) {
     const { action, locator, value, timeout = 10000 } = step;
     
-    // Simulate step execution time
-    await new Promise(resolve => setTimeout(resolve, 1000 + Math.random() * 2000));
-    
-    // Mock different step types
     switch (action.toLowerCase()) {
       case 'click':
-        console.log(`Clicking element: ${locator}`);
+        const element = await driver.$(locator);
+        await element.waitForDisplayed({ timeout });
+        await element.click();
         break;
+        
       case 'setvalue':
-        console.log(`Setting value "${value}" for element: ${locator}`);
+        const inputElement = await driver.$(locator);
+        await inputElement.waitForDisplayed({ timeout });
+        await inputElement.setValue(value);
         break;
+        
       case 'waitfordisplayed':
-        console.log(`Waiting for element to be displayed: ${locator}`);
+        const waitElement = await driver.$(locator);
+        await waitElement.waitForDisplayed({ timeout });
         break;
-      case 'url':
-        console.log(`Navigating to URL: ${value}`);
+        
+      case 'wait':
+        await driver.pause(parseInt(value) || 1000);
         break;
+        
+      case 'navigate':
+        // Handle navigation actions
+        await driver.pause(1000);
+        break;
+        
+      case 'verify':
+        const verifyElement = await driver.$(locator);
+        await verifyElement.waitForDisplayed({ timeout });
+        break;
+        
+      case 'exit':
+        // Handle exit actions
+        await driver.pause(1000);
+        break;
+        
       default:
-        console.log(`Executing action: ${action}`);
-    }
-  }
-
-  async takeScreenshot(appiumSessionId, name) {
-    try {
-      // Mock screenshot capture
-      const screenshotDir = path.join(__dirname, '../reports', 'screenshots');
-      await fs.ensureDir(screenshotDir);
-      
-      const filename = `${name}_${Date.now()}.png`;
-      const screenshotPath = path.join(screenshotDir, filename);
-      
-      // Create a mock screenshot file
-      await fs.writeFile(screenshotPath, 'Mock screenshot data');
-      
-      return screenshotPath;
-      
-    } catch (error) {
-      console.error('Screenshot capture error:', error);
-      return null;
+        console.log(`Executing generic action: ${action}`);
+        await driver.pause(1000);
     }
   }
 
@@ -258,175 +392,94 @@ class AppiumService {
     // Parse the test script and extract steps
     const steps = [];
     
-    // Mock parsing - in real implementation, this would parse the actual script
-    if (testScript.code && testScript.code.includes('login')) {
+    if (testScript.code) {
+      // Parse the generated code and extract steps
+      const code = testScript.code;
+      
+      // Extract click actions
+      const clickMatches = code.match(/await driver\.\$\(['"`]([^'"`]+)['"`]\)\.click\(\)/g);
+      if (clickMatches) {
+        clickMatches.forEach(match => {
+          const locator = match.match(/['"`]([^'"`]+)['"`]/)[1];
+          steps.push({ action: 'click', locator });
+        });
+      }
+      
+      // Extract setValue actions
+      const setValueMatches = code.match(/await driver\.\$\(['"`]([^'"`]+)['"`]\)\.setValue\(['"`]([^'"`]+)['"`]\)/g);
+      if (setValueMatches) {
+        setValueMatches.forEach(match => {
+          const [, locator, value] = match.match(/['"`]([^'"`]+)['"`]\.setValue\(['"`]([^'"`]+)['"`]\)/);
+          steps.push({ action: 'setValue', locator, value });
+        });
+      }
+      
+      // Extract wait actions
+      const waitMatches = code.match(/await driver\.pause\((\d+)\)/g);
+      if (waitMatches) {
+        waitMatches.forEach(match => {
+          const duration = match.match(/\((\d+)\)/)[1];
+          steps.push({ action: 'wait', value: duration });
+        });
+      }
+    }
+    
+    // If no steps found, create default steps
+    if (steps.length === 0) {
       steps.push(
-        { action: 'Launch app', screenshot: true },
-        { action: 'Navigate to login screen', screenshot: false },
-        { action: 'Enter username', locator: 'username_input', value: 'testuser@example.com', screenshot: false },
-        { action: 'Enter password', locator: 'password_input', value: 'password123', screenshot: false },
-        { action: 'Click login button', locator: 'login_button', screenshot: false },
-        { action: 'Verify dashboard loads', locator: 'dashboard_container', screenshot: true }
-      );
-    } else {
-      steps.push(
-        { action: 'Launch app', screenshot: true },
-        { action: 'Execute test case', screenshot: true }
+        { action: 'Launch app', locator: 'app' },
+        { action: 'Wait for app to load', locator: 'main_screen', value: '5000' },
+        { action: 'Verify app is running', locator: 'app_content' }
       );
     }
     
     return steps;
   }
 
-  getCapabilities(platform) {
-    const baseCapabilities = {
-      'appium:automationName': platform === 'web' ? 'chromedriver' : (platform === 'android' ? 'UiAutomator2' : 'XCUITest'),
-      'appium:noReset': false,
-      'appium:newCommandTimeout': 60
-    };
-
-    if (platform === 'android') {
-      return {
-        ...baseCapabilities,
-        platformName: 'Android',
-        'appium:deviceName': 'Android Emulator',
-        'appium:app': '/path/to/app.apk'
-      };
-    } else if (platform === 'ios') {
-      return {
-        ...baseCapabilities,
-        platformName: 'iOS',
-        'appium:deviceName': 'iPhone Simulator',
-        'appium:app': '/path/to/app.app'
-      };
-    } else {
-      return {
-        ...baseCapabilities,
-        browserName: 'chrome',
-        'goog:chromeOptions': {
-          args: ['--no-sandbox', '--disable-dev-shm-usage']
-        }
-      };
+  async takeScreenshot(name) {
+    try {
+      const timestamp = Date.now();
+      const filename = `${name}_${timestamp}.png`;
+      const screenshotPath = path.join(this.screenshotsDir, filename);
+      
+      if (this.driver) {
+        await this.driver.saveScreenshot(screenshotPath);
+        console.log(`📸 Screenshot saved: ${filename}`);
+      }
+      
+      return screenshotPath;
+    } catch (error) {
+      console.error('Failed to take screenshot:', error);
+      return null;
     }
   }
 
-  getDeviceInfo(platform) {
-    const devices = {
-      android: 'Pixel 6 (Android 13)',
-      ios: 'iPhone 14 (iOS 16)',
-      web: 'Chrome Browser'
-    };
-    
-    return devices[platform] || 'Unknown Device';
-  }
-
-  async getAppiumVersion() {
+  async cleanup() {
     try {
-      const response = await axios.get(`${this.appiumUrl}/status`);
-      return response.data.value.version || 'Unknown';
+      if (this.driver) {
+        await this.driver.deleteSession();
+        this.driver = null;
+        console.log('✅ Appium session cleaned up');
+      }
+      
+      if (this.emulatorProcess) {
+        this.emulatorProcess.kill();
+        this.emulatorProcess = null;
+        console.log('✅ Emulator process cleaned up');
+      }
+      
+      console.log('✅ Appium service cleaned up');
     } catch (error) {
-      return 'Mock Appium 2.0';
+      console.error('❌ Cleanup error:', error);
     }
   }
 
-  getMockTestResults(platform) {
-    const startTime = Date.now() - 45000; // 45 seconds ago
-    const endTime = Date.now();
-    
-    return {
-      sessionId: uuidv4(),
-      platform: platform,
-      status: 'PASS',
-      duration: '45.2s',
-      startTime: new Date(startTime).toISOString(),
-      endTime: new Date(endTime).toISOString(),
-      steps: [
-        {
-          step: 1,
-          action: 'Launch app',
-          status: 'PASS',
-          duration: '2.1s',
-          timestamp: new Date(startTime + 2000).toISOString()
-        },
-        {
-          step: 2,
-          action: 'Navigate to login screen',
-          status: 'PASS',
-          duration: '1.5s',
-          timestamp: new Date(startTime + 4000).toISOString()
-        },
-        {
-          step: 3,
-          action: 'Enter credentials',
-          status: 'PASS',
-          duration: '2.0s',
-          timestamp: new Date(startTime + 6000).toISOString()
-        },
-        {
-          step: 4,
-          action: 'Click login button',
-          status: 'PASS',
-          duration: '0.8s',
-          timestamp: new Date(startTime + 8000).toISOString()
-        },
-        {
-          step: 5,
-          action: 'Verify dashboard loads',
-          status: 'PASS',
-          duration: '3.2s',
-          timestamp: new Date(startTime + 12000).toISOString()
-        }
-      ],
-      screenshots: [
-        {
-          id: 'screenshot-1',
-          name: 'Login Screen',
-          path: '/reports/mock/screenshots/login.png',
-          timestamp: new Date(startTime + 3000).toISOString()
-        },
-        {
-          id: 'screenshot-2',
-          name: 'Dashboard Screen',
-          path: '/reports/mock/screenshots/dashboard.png',
-          timestamp: new Date(startTime + 15000).toISOString()
-        }
-      ],
-      logs: [
-        '🚀 Starting test execution...',
-        '📱 App launched successfully',
-        '✅ Step 1 completed: Launch app',
-        '✅ Step 2 completed: Navigate to login screen',
-        '✅ Step 3 completed: Enter credentials',
-        '✅ Step 4 completed: Click login button',
-        '✅ Step 5 completed: Verify dashboard loads',
-        '✅ Test completed successfully'
-      ],
-      error: null,
-      metadata: {
-        device: this.getDeviceInfo(platform),
-        appiumVersion: 'Mock Appium 2.0',
-        testEnvironment: 'QA'
-      }
-    };
-  }
-
-  async getSessionStatus(sessionId) {
-    const session = this.sessions.get(sessionId);
-    return session || null;
-  }
-
-  async cleanupSession(sessionId) {
+  async checkAppiumServer() {
     try {
-      const session = this.sessions.get(sessionId);
-      if (session && session.appiumSessionId) {
-        await axios.delete(`${this.appiumUrl}/session/${session.appiumSessionId}`);
-        console.log(`🗑️ Appium session cleaned up: ${session.appiumSessionId}`);
-      }
-      
-      this.sessions.delete(sessionId);
-      
+      const response = await fetch(`${this.appiumServerUrl}/status`);
+      return response.ok;
     } catch (error) {
-      console.warn('Session cleanup error:', error.message);
+      return false;
     }
   }
 }

@@ -1,350 +1,170 @@
-const sgMail = require('@sendgrid/mail');
+const nodemailer = require('nodemailer');
+const fs = require('fs-extra');
+const path = require('path');
 
 class EmailService {
   constructor() {
-    this.sendgridApiKey = process.env.SENDGRID_API_KEY;
-    this.fromEmail = process.env.FROM_EMAIL;
-    this.toEmail = process.env.TO_EMAIL;
-    
-    if (this.sendgridApiKey) {
-      sgMail.setApiKey(this.sendgridApiKey);
+    this.transporter = null;
+    this.initializeTransporter();
+  }
+
+  initializeTransporter() {
+    try {
+      // For development, use a mock transporter
+      if (process.env.NODE_ENV === 'development' || !process.env.SMTP_HOST) {
+        this.transporter = {
+          sendMail: async (options) => {
+            console.log('📧 Mock Email Sent:', {
+              to: options.to,
+              subject: options.subject,
+              text: options.text?.substring(0, 100) + '...'
+            });
+            return { messageId: 'mock-message-id' };
+          }
+        };
+        console.log('✅ Mock email service initialized');
+      } else {
+        // Production email configuration
+        this.transporter = nodemailer.createTransporter({
+          host: process.env.SMTP_HOST,
+          port: process.env.SMTP_PORT || 587,
+          secure: process.env.SMTP_SECURE === 'true',
+          auth: {
+            user: process.env.SMTP_USER,
+            pass: process.env.SMTP_PASS
+          }
+        });
+        console.log('✅ Email service initialized with SMTP');
+      }
+    } catch (error) {
+      console.error('❌ Email service initialization failed:', error);
+      // Fallback to mock service
+      this.transporter = {
+        sendMail: async (options) => {
+          console.log('📧 Fallback Email Sent:', {
+            to: options.to,
+            subject: options.subject
+          });
+          return { messageId: 'fallback-message-id' };
+        }
+      };
     }
   }
 
-  async sendTestReport(report, customEmail = null) {
+  async sendTestReport(report, recipientEmail = 'amahangade24@gmail.com') {
     try {
-      console.log(`📧 Sending test report email: ${report.id}`);
-      
-      if (!this.sendgridApiKey) {
-        console.warn('SendGrid API key not configured, skipping email send');
-        return { success: false, message: 'SendGrid not configured' };
-      }
+      console.log(`📧 Sending test report to: ${recipientEmail}`);
 
-      const emailContent = await this.generateEmailContent(report);
-      const recipientEmail = customEmail || this.toEmail;
-      
-      if (!recipientEmail) {
-        throw new Error('No recipient email configured');
-      }
+      const emailContent = this.generateEmailContent(report);
+      const attachments = await this.prepareAttachments(report);
 
-      const msg = {
+      const mailOptions = {
+        from: process.env.SMTP_FROM || 'testkami@example.com',
         to: recipientEmail,
-        from: this.fromEmail,
-        subject: emailContent.subject,
+        subject: `Test Execution Report - ${report.status.toUpperCase()} - ${report.platform}`,
         html: emailContent.html,
         text: emailContent.text,
-        attachments: await this.prepareAttachments(report)
+        attachments
       };
 
-      const response = await sgMail.send(msg);
+      const result = await this.transporter.sendMail(mailOptions);
       
-      console.log(`✅ Email sent successfully to ${recipientEmail}`);
-      
+      console.log('✅ Test report email sent successfully');
       return {
         success: true,
-        messageId: response[0].headers['x-message-id'],
+        messageId: result.messageId,
         recipient: recipientEmail
       };
 
     } catch (error) {
-      console.error('Email sending error:', error);
-      
-      // Return mock success if SendGrid is not available
-      if (error.code === 'UNAUTHORIZED' || error.code === 'FORBIDDEN') {
-        console.warn('SendGrid authentication failed, using mock response');
-        return {
-          success: true,
-          messageId: 'mock-message-id',
-          recipient: customEmail || this.toEmail,
-          isMock: true
-        };
-      }
-      
-      throw new Error(`Failed to send email: ${error.message}`);
-    }
-  }
-
-  async generateEmailContent(report) {
-    const { id, testCase, platform, result, duration, summary, error } = report;
-    
-    const emailSubject = `Test Report - ${result} - ${testCase}`;
-    
-    const emailBody = `
-<!DOCTYPE html>
-<html>
-<head>
-    <style>
-        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
-        .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-        .header { background: #f8f9fa; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
-        .status-badge { display: inline-block; padding: 8px 16px; border-radius: 20px; font-weight: bold; }
-        .status-pass { background: #28a745; color: white; }
-        .status-fail { background: #dc3545; color: white; }
-        .summary { background: white; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
-        .summary-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; }
-        .summary-item { text-align: center; }
-        .summary-label { font-size: 0.9rem; color: #666; margin-bottom: 5px; }
-        .summary-value { font-size: 1.5rem; font-weight: bold; }
-        .footer { text-align: center; margin-top: 30px; color: #666; font-size: 0.9rem; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="header">
-            <h2>Test Execution Report</h2>
-            <p><strong>Test ID:</strong> ${id}</p>
-            <p><strong>Test Case:</strong> ${testCase}</p>
-            <p><strong>Platform:</strong> ${platform}</p>
-            <div class="status-badge ${result === 'PASS' ? 'status-pass' : 'status-fail'}">
-                ${result}
-            </div>
-        </div>
-
-        <div class="summary">
-            <h3>Test Summary</h3>
-            <div class="summary-grid">
-                <div class="summary-item">
-                    <div class="summary-label">Duration</div>
-                    <div class="summary-value">${duration}</div>
-                </div>
-                <div class="summary-item">
-                    <div class="summary-label">Success Rate</div>
-                    <div class="summary-value">${summary.successRate}</div>
-                </div>
-                <div class="summary-item">
-                    <div class="summary-label">Total Steps</div>
-                    <div class="summary-value">${summary.totalSteps}</div>
-                </div>
-                <div class="summary-item">
-                    <div class="summary-label">Screenshots</div>
-                    <div class="summary-value">${summary.totalScreenshots}</div>
-                </div>
-            </div>
-        </div>
-
-        ${error ? `
-        <div class="summary">
-            <h3>Error Details</h3>
-            <p style="color: #dc3545; background: #f8d7da; padding: 15px; border-radius: 5px;">
-                ${error}
-            </p>
-        </div>
-        ` : ''}
-
-        <div class="footer">
-            <p>This report was automatically generated by Autosana Test Automation Platform</p>
-            <p>For detailed information, please check the full report in the dashboard</p>
-        </div>
-    </div>
-</body>
-</html>
-    `;
-
-    return {
-      subject: emailSubject,
-      html: emailBody,
-      text: this.generateTextEmail(report)
-    };
-  }
-
-  generateTextEmail(report) {
-    const { id, testCase, platform, result, duration, summary, error } = report;
-    
-    return `
-Test Execution Report
-====================
-
-Test ID: ${id}
-Test Case: ${testCase}
-Platform: ${platform}
-Result: ${result}
-Duration: ${duration}
-
-Summary:
-- Success Rate: ${summary.successRate}
-- Total Steps: ${summary.totalSteps}
-- Passed Steps: ${summary.passedSteps}
-- Failed Steps: ${summary.failedSteps}
-- Screenshots: ${summary.totalScreenshots}
-
-${error ? `Error: ${error}` : ''}
-
-This report was automatically generated by Autosana Test Automation Platform.
-    `;
-  }
-
-  async prepareAttachments(report) {
-    const attachments = [];
-    
-    try {
-      // Add JSON report as attachment
-      const reportPath = `./reports/${report.id}/report.json`;
-      const fs = require('fs-extra');
-      
-      if (await fs.pathExists(reportPath)) {
-        const reportContent = await fs.readFile(reportPath, 'utf8');
-        attachments.push({
-          content: Buffer.from(reportContent).toString('base64'),
-          filename: `test-report-${report.id}.json`,
-          type: 'application/json',
-          disposition: 'attachment'
-        });
-      }
-
-      // Add screenshots as attachments
-      if (report.screenshots && report.screenshots.length > 0) {
-        for (const screenshot of report.screenshots.slice(0, 3)) { // Limit to 3 screenshots
-          try {
-            const screenshotPath = screenshot.path.replace('/reports/', './reports/');
-            if (await fs.pathExists(screenshotPath)) {
-              const screenshotContent = await fs.readFile(screenshotPath);
-              attachments.push({
-                content: screenshotContent.toString('base64'),
-                filename: `${screenshot.name}.png`,
-                type: 'image/png',
-                disposition: 'attachment'
-              });
-            }
-          } catch (error) {
-            console.warn(`Failed to attach screenshot ${screenshot.name}:`, error.message);
-          }
-        }
-      }
-
-    } catch (error) {
-      console.warn('Failed to prepare attachments:', error.message);
-    }
-
-    return attachments;
-  }
-
-  async sendBatchReports(reports, recipientEmail = null) {
-    try {
-      console.log(`📧 Sending batch email reports: ${reports.length} reports`);
-      
-      if (!this.sendgridApiKey) {
-        console.warn('SendGrid API key not configured, skipping batch email send');
-        return { success: false, message: 'SendGrid not configured' };
-      }
-
-      const email = recipientEmail || this.toEmail;
-      if (!email) {
-        throw new Error('No recipient email configured');
-      }
-
-      // Generate batch email content
-      const batchContent = this.generateBatchEmailContent(reports);
-      
-      const msg = {
-        to: email,
-        from: this.fromEmail,
-        subject: `Batch Test Report - ${reports.length} Tests`,
-        html: batchContent.html,
-        text: batchContent.text
-      };
-
-      const response = await sgMail.send(msg);
-      
-      console.log(`✅ Batch email sent successfully to ${email}`);
-      
+      console.error('❌ Failed to send test report email:', error);
       return {
-        success: true,
-        messageId: response[0].headers['x-message-id'],
-        recipient: email,
-        reportCount: reports.length
+        success: false,
+        error: error.message
       };
-
-    } catch (error) {
-      console.error('Batch email sending error:', error);
-      throw new Error(`Failed to send batch email: ${error.message}`);
     }
   }
 
-  generateBatchEmailContent(reports) {
-    const totalReports = reports.length;
-    const passedReports = reports.filter(r => r.result === 'PASS').length;
-    const failedReports = reports.filter(r => r.result === 'FAIL').length;
-    const successRate = totalReports > 0 ? ((passedReports / totalReports) * 100).toFixed(1) : '0.0';
-
+  generateEmailContent(report) {
+    const statusColor = report.status === 'passed' ? '#10B981' : '#EF4444';
+    const statusIcon = report.status === 'passed' ? '✅' : '❌';
+    
     const html = `
 <!DOCTYPE html>
 <html>
 <head>
+    <meta charset="utf-8">
+    <title>Test Execution Report</title>
     <style>
         body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
         .container { max-width: 800px; margin: 0 auto; padding: 20px; }
-        .header { background: #f8f9fa; padding: 20px; border-radius: 8px; margin-bottom: 20px; text-align: center; }
-        .summary { background: white; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
-        .summary-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; }
-        .summary-item { text-align: center; }
-        .summary-label { font-size: 0.9rem; color: #666; margin-bottom: 5px; }
-        .summary-value { font-size: 1.5rem; font-weight: bold; }
-        .reports-table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-        .reports-table th, .reports-table td { padding: 10px; text-align: left; border-bottom: 1px solid #ddd; }
-        .reports-table th { background: #f8f9fa; font-weight: bold; }
-        .status-pass { color: #28a745; font-weight: bold; }
-        .status-fail { color: #dc3545; font-weight: bold; }
-        .footer { text-align: center; margin-top: 30px; color: #666; font-size: 0.9rem; }
+        .header { background: #f8f9fa; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
+        .status { display: inline-block; padding: 8px 16px; border-radius: 4px; color: white; font-weight: bold; }
+        .summary { background: #f8f9fa; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
+        .steps { margin-bottom: 20px; }
+        .step { padding: 10px; margin: 5px 0; border-left: 4px solid #ddd; }
+        .step.passed { border-left-color: #10B981; background: #f0fdf4; }
+        .step.failed { border-left-color: #EF4444; background: #fef2f2; }
+        .screenshots { margin-top: 20px; }
+        .screenshot { margin: 10px 0; }
+        .footer { margin-top: 30px; padding-top: 20px; border-top: 1px solid #ddd; font-size: 12px; color: #666; }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
-            <h2>Batch Test Execution Report</h2>
-            <p>${totalReports} tests executed</p>
+            <h1>🧪 Test Execution Report</h1>
+            <p><strong>Test ID:</strong> ${report.testId}</p>
+            <p><strong>Platform:</strong> ${report.platform}</p>
+            <p><strong>Test Case:</strong> ${report.naturalLanguageTest}</p>
+            <p><strong>Status:</strong> <span class="status" style="background-color: ${statusColor};">${statusIcon} ${report.status.toUpperCase()}</span></p>
         </div>
 
         <div class="summary">
-            <h3>Summary</h3>
-            <div class="summary-grid">
-                <div class="summary-item">
-                    <div class="summary-label">Total Tests</div>
-                    <div class="summary-value">${totalReports}</div>
-                </div>
-                <div class="summary-item">
-                    <div class="summary-label">Passed</div>
-                    <div class="summary-value" style="color: #28a745;">${passedReports}</div>
-                </div>
-                <div class="summary-item">
-                    <div class="summary-label">Failed</div>
-                    <div class="summary-value" style="color: #dc3545;">${failedReports}</div>
-                </div>
-                <div class="summary-item">
-                    <div class="summary-label">Success Rate</div>
-                    <div class="summary-value">${successRate}%</div>
-                </div>
-            </div>
+            <h2>📊 Execution Summary</h2>
+            <p><strong>Start Time:</strong> ${new Date(report.startTime).toLocaleString()}</p>
+            <p><strong>End Time:</strong> ${new Date(report.endTime).toLocaleString()}</p>
+            <p><strong>Duration:</strong> ${(report.duration / 1000).toFixed(2)} seconds</p>
+            <p><strong>Total Steps:</strong> ${report.summary.totalSteps}</p>
+            <p><strong>Passed Steps:</strong> ${report.summary.passedSteps}</p>
+            <p><strong>Failed Steps:</strong> ${report.summary.failedSteps}</p>
         </div>
 
-        <div class="summary">
-            <h3>Test Results</h3>
-            <table class="reports-table">
-                <thead>
-                    <tr>
-                        <th>Test ID</th>
-                        <th>Test Case</th>
-                        <th>Platform</th>
-                        <th>Result</th>
-                        <th>Duration</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    ${reports.map(report => `
-                        <tr>
-                            <td>${report.id}</td>
-                            <td>${report.testCase}</td>
-                            <td>${report.platform}</td>
-                            <td class="status-${report.result.toLowerCase()}">${report.result}</td>
-                            <td>${report.duration}</td>
-                        </tr>
-                    `).join('')}
-                </tbody>
-            </table>
+        <div class="steps">
+            <h2>📝 Test Steps</h2>
+            ${report.steps.map(step => `
+                <div class="step ${step.status}">
+                    <strong>${step.name}</strong><br>
+                    Status: ${step.status.toUpperCase()}<br>
+                    Duration: ${step.duration}ms<br>
+                    Time: ${new Date(step.timestamp).toLocaleString()}
+                    ${step.error ? `<br><em>Error: ${step.error}</em>` : ''}
+                </div>
+            `).join('')}
         </div>
+
+        ${report.screenshots.length > 0 ? `
+        <div class="screenshots">
+            <h2>📸 Screenshots</h2>
+            ${report.screenshots.map(screenshot => `
+                <div class="screenshot">
+                    <strong>${screenshot.name}</strong><br>
+                    Time: ${new Date(screenshot.timestamp).toLocaleString()}
+                </div>
+            `).join('')}
+        </div>
+        ` : ''}
+
+        ${report.error ? `
+        <div class="error">
+            <h2>❌ Error Details</h2>
+            <p><strong>Error:</strong> ${report.error}</p>
+        </div>
+        ` : ''}
 
         <div class="footer">
-            <p>This batch report was automatically generated by Autosana Test Automation Platform</p>
-            <p>For detailed information, please check the individual reports in the dashboard</p>
+            <p>This report was generated by Testkami - AI-powered test automation platform</p>
+            <p>Generated at: ${new Date(report.generatedAt).toLocaleString()}</p>
         </div>
     </div>
 </body>
@@ -352,44 +172,99 @@ This report was automatically generated by Autosana Test Automation Platform.
     `;
 
     const text = `
-Batch Test Execution Report
-==========================
+Test Execution Report
+====================
 
-Total Tests: ${totalReports}
-Passed: ${passedReports}
-Failed: ${failedReports}
-Success Rate: ${successRate}%
+Test ID: ${report.testId}
+Platform: ${report.platform}
+Test Case: ${report.naturalLanguageTest}
+Status: ${report.status.toUpperCase()}
 
-Test Results:
-${reports.map(report => `
-- ${report.id}: ${report.testCase} (${report.platform}) - ${report.result} - ${report.duration}
+Execution Summary:
+- Start Time: ${new Date(report.startTime).toLocaleString()}
+- End Time: ${new Date(report.endTime).toLocaleString()}
+- Duration: ${(report.duration / 1000).toFixed(2)} seconds
+- Total Steps: ${report.summary.totalSteps}
+- Passed Steps: ${report.summary.passedSteps}
+- Failed Steps: ${report.summary.failedSteps}
+
+Test Steps:
+${report.steps.map(step => `
+${step.name}
+Status: ${step.status.toUpperCase()}
+Duration: ${step.duration}ms
+Time: ${new Date(step.timestamp).toLocaleString()}
+${step.error ? `Error: ${step.error}` : ''}
 `).join('')}
 
-This batch report was automatically generated by Autosana Test Automation Platform.
+${report.error ? `
+Error Details:
+${report.error}
+` : ''}
+
+Generated by Testkami - AI-powered test automation platform
+Generated at: ${new Date(report.generatedAt).toLocaleString()}
     `;
 
     return { html, text };
   }
 
-  async validateEmailConfiguration() {
-    const issues = [];
-    
-    if (!this.sendgridApiKey) {
-      issues.push('SendGrid API key not configured');
+  async prepareAttachments(report) {
+    const attachments = [];
+
+    try {
+      // Add screenshots as attachments
+      for (const screenshot of report.screenshots) {
+        if (await fs.pathExists(screenshot.path)) {
+          attachments.push({
+            filename: path.basename(screenshot.path),
+            path: screenshot.path,
+            cid: screenshot.name.replace(/\s+/g, '_')
+          });
+        }
+      }
+
+      // Add report JSON as attachment
+      const reportPath = path.join(__dirname, '../../reports', `${report.id}.json`);
+      if (await fs.pathExists(reportPath)) {
+        attachments.push({
+          filename: `report_${report.id}.json`,
+          path: reportPath
+        });
+      }
+
+    } catch (error) {
+      console.error('Error preparing attachments:', error);
     }
-    
-    if (!this.fromEmail) {
-      issues.push('From email not configured');
+
+    return attachments;
+  }
+
+  async sendNotification(recipientEmail, subject, message) {
+    try {
+      const mailOptions = {
+        from: process.env.SMTP_FROM || 'testkami@example.com',
+        to: recipientEmail,
+        subject: subject,
+        text: message,
+        html: `<p>${message}</p>`
+      };
+
+      const result = await this.transporter.sendMail(mailOptions);
+      
+      console.log('✅ Notification email sent successfully');
+      return {
+        success: true,
+        messageId: result.messageId
+      };
+
+    } catch (error) {
+      console.error('❌ Failed to send notification email:', error);
+      return {
+        success: false,
+        error: error.message
+      };
     }
-    
-    if (!this.toEmail) {
-      issues.push('To email not configured');
-    }
-    
-    return {
-      isValid: issues.length === 0,
-      issues
-    };
   }
 }
 

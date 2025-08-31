@@ -4,15 +4,17 @@ const helmet = require('helmet');
 const compression = require('compression');
 const rateLimit = require('express-rate-limit');
 const path = require('path');
+const AndroidCheck = require('./utils/androidCheck');
+const logger = require('./utils/logger');
 require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// Import routes (comment out problematic ones for now)
-// const testRoutes = require('./routes/testRoutes');
+// Import routes
+const testRoutes = require('./routes/testRoutes');
 const uploadRoutes = require('./routes/uploadRoutes');
-// const reportRoutes = require('./routes/reportRoutes');
+const reportRoutes = require('./routes/reportRoutes');
 
 // Security middleware
 app.use(helmet({
@@ -53,6 +55,9 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
 }));
 
+// Request logging middleware
+app.use(logger.requestLogger());
+
 // Body parsing middleware
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
@@ -63,6 +68,12 @@ app.use('/reports', express.static(path.join(__dirname, '../reports')));
 
 // Health check endpoint
 app.get('/health', (req, res) => {
+  logger.health('healthy', {
+    uptime: process.uptime(),
+    environment: process.env.NODE_ENV,
+    memory: process.memoryUsage()
+  });
+  
   res.status(200).json({
     status: 'OK',
     timestamp: new Date().toISOString(),
@@ -115,27 +126,22 @@ app.get('/api/tests/history', (req, res) => {
   });
 });
 
-app.post('/api/tests/execute', (req, res) => {
-  res.json({
-    success: true,
-    testId: 'mock-test-' + Date.now(),
-    message: 'Test execution completed (mock)',
-    report: {
-      status: 'PASS',
-      duration: '2.5s',
-      steps: 3
-    }
-  });
-});
+// Mock endpoint removed - using real automation from testRoutes.js
 
-// API routes (only upload for now)
+// API routes
 app.use('/api/upload', uploadRoutes);
-// app.use('/api/tests', testRoutes);
-// app.use('/api/reports', reportRoutes);
+app.use('/api/tests', testRoutes);
+app.use('/api/reports', reportRoutes);
+
+// Serve reports directory for direct access
+app.use('/reports', express.static(path.join(__dirname, '../reports')));
+
+// Error logging middleware
+app.use(logger.errorLogger());
 
 // Error handling middleware
 app.use((err, req, res, next) => {
-  console.error('Error:', err);
+  logger.error('Unhandled server error', err);
   
   if (err.type === 'entity.too.large') {
     return res.status(413).json({
@@ -159,21 +165,30 @@ app.use('*', (req, res) => {
 });
 
 // Start server
-app.listen(PORT, () => {
-  console.log(`🚀 Testkami Server running on port ${PORT}`);
-  console.log(`📊 Health check: http://localhost:${PORT}/health`);
-  console.log(`🌍 Environment: ${process.env.NODE_ENV}`);
-  console.log('✅ MVP Mode: Basic functionality enabled');
+app.listen(PORT, async () => {
+  logger.startup('Testkami Server', {
+    port: PORT,
+    environment: process.env.NODE_ENV,
+    healthCheck: `http://localhost:${PORT}/health`
+  });
+  
+  // Log memory usage
+  logger.memory();
+  
+  // Check Android development environment
+  await AndroidCheck.runFullCheck();
+  
+  logger.success('MVP Mode: Basic functionality enabled');
 });
 
 // Graceful shutdown
 process.on('SIGTERM', () => {
-  console.log('SIGTERM received, shutting down gracefully');
+  logger.shutdown('Server', { signal: 'SIGTERM' });
   process.exit(0);
 });
 
 process.on('SIGINT', () => {
-  console.log('SIGINT received, shutting down gracefully');
+  logger.shutdown('Server', { signal: 'SIGINT' });
   process.exit(0);
 });
 
