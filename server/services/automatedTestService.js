@@ -339,6 +339,17 @@ class AutomatedTestService {
       steps.push({ type: 'pause', value: ms, description: `Wait ${ms}ms` });
     }
 
+    // back
+    const backRegex = /await\s+driver\.back\(\)/g;
+    if (backRegex.test(script)) {
+      // reset regex and collect all
+      backRegex.lastIndex = 0;
+      let m;
+      while ((m = backRegex.exec(script)) !== null) {
+        steps.push({ type: 'back', description: 'Go back' });
+      }
+    }
+
     // 2) If none extracted, fallback to previous step grouping
     if (steps.length === 0) {
       const lines = script.split('\n');
@@ -402,6 +413,29 @@ class AutomatedTestService {
         await driver.pause(Number(step.value) || 1000);
         return;
       }
+      case 'back': {
+        // Try standard back
+        try {
+          await driver.back();
+          await driver.pause(500);
+        } catch {}
+
+        // Dismiss any popups that might block back
+        await this.dismissSystemPopups(driver);
+
+        // Fallback: Android back key via mobile command
+        try {
+          await driver.execute('mobile: pressKey', { keycode: 4 });
+          await driver.pause(400);
+        } catch {}
+
+        // Last resort: adb keyevent back
+        try {
+          await execAsync('adb shell input keyevent 4');
+          await driver.pause(300);
+        } catch {}
+        return;
+      }
       default: {
         return;
       }
@@ -433,6 +467,10 @@ class AutomatedTestService {
       candidates.push(() => driver.$(`android=new UiSelector().textContains("${locator}")`));
       candidates.push(() => driver.$(`android=new UiSelector().description("${locator}")`));
       candidates.push(() => driver.$(`android=new UiSelector().descriptionContains("${locator}")`));
+
+      // Scroll into view by text if not immediately present
+      candidates.push(() => driver.$(`android=new UiScrollable(new UiSelector().scrollable(true)).scrollTextIntoView("${locator}")`));
+      candidates.push(() => driver.$(`android=new UiScrollable(new UiSelector().scrollable(true)).scrollIntoView(new UiSelector().textContains("${locator}"))`));
     }
 
     let lastError;
@@ -456,12 +494,25 @@ class AutomatedTestService {
     ];
 
     try {
+      // 1) Common Android dialog buttons by resource-id
+      const ids = ['android:id/button1', 'android:id/button2', 'android:id/button3'];
+      for (const id of ids) {
+        try {
+          const byId = await driver.$(`android=new UiSelector().resourceId("${id}")`);
+          if (await byId.isExisting() && await byId.isDisplayed()) {
+            await byId.click();
+            await driver.pause(250);
+          }
+        } catch {}
+      }
+
+      // 2) Direct text matches
       for (const text of labels) {
         try {
           const el = await driver.$(`android=new UiSelector().text("${text}")`);
           if (await el.isExisting()) {
             await el.click();
-            await driver.pause(300);
+            await driver.pause(250);
             continue;
           }
         } catch {}
@@ -469,11 +520,27 @@ class AutomatedTestService {
           const el2 = await driver.$(`android=new UiSelector().textContains("${text}")`);
           if (await el2.isExisting()) {
             await el2.click();
-            await driver.pause(300);
+            await driver.pause(250);
             continue;
           }
         } catch {}
       }
+
+      // 3) Regex match on any button text (case-insensitive)
+      const regexes = ['OK', 'Allow', 'Cancel', 'Got it', 'While Using', "Don\\'t allow", 'Wait'];
+      for (const rx of regexes) {
+        try {
+          const el = await driver.$(`android=new UiSelector().className("android.widget.Button").textMatches("(?i).*${rx}.*")`);
+          if (await el.isExisting()) {
+            await el.click();
+            await driver.pause(250);
+          }
+        } catch {}
+      }
+
+      // 4) As a last resort, press ENTER then BACK
+      try { await driver.execute('mobile: pressKey', { keycode: 66 }); await driver.pause(200); } catch {}
+      try { await driver.execute('mobile: pressKey', { keycode: 4 }); await driver.pause(200); } catch {}
     } catch {}
   }
 

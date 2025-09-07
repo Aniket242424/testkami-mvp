@@ -80,101 +80,90 @@ executeTest();
   }
 
   parseNaturalLanguageToSteps(testCase) {
-    const testCaseLower = testCase.toLowerCase();
     const steps = [];
 
-    // Click actions
-    if (testCaseLower.includes('click') || testCaseLower.includes('tap')) {
-      const target = this.extractTarget(testCase);
-      steps.push({
-        description: `Click on ${target}`,
-        code: `await driver.$('~${target}').click();`
-      });
-    }
+    // Split into lines/commands
+    const parts = String(testCase)
+      .split(/\r?\n|;|\.|\u2022|\-/)
+      .map(s => s.trim())
+      .filter(Boolean);
 
-    // Input/type actions
-    if (testCaseLower.includes('type') || testCaseLower.includes('enter') || testCaseLower.includes('input')) {
-      const target = this.extractTarget(testCase);
-      const value = this.extractValue(testCase);
-      steps.push({
-        description: `Enter text in ${target}`,
-        code: `await driver.$('~${target}').setValue('${value}');`
-      });
-    }
+    const addClick = (target) => steps.push({
+      description: `Click on ${target}`,
+      code: `await driver.$('~${target}').click();`
+    });
 
-    // Wait actions
-    if (testCaseLower.includes('wait')) {
-      const waitTime = this.extractWaitTime(testCase);
-      steps.push({
-        description: `Wait for ${waitTime}ms`,
-        code: `await driver.pause(${waitTime});`
-      });
-    }
+    for (const line of (parts.length ? parts : [testCase])) {
+      const lower = line.toLowerCase();
 
-    // Navigate actions
-    if (testCaseLower.includes('navigate') || testCaseLower.includes('go to') || testCaseLower.includes('open')) {
-      const target = this.extractTarget(testCase);
-      steps.push({
-        description: `Navigate to ${target}`,
-        code: `await driver.$('~${target}').click();`
-      });
-    }
+      if (/(go\s*back|back)/i.test(lower)) {
+        steps.push({ description: 'Go back', code: `await driver.back();` });
+        continue;
+      }
 
-    // Verify actions
-    if (testCaseLower.includes('verify') || testCaseLower.includes('check') || testCaseLower.includes('confirm')) {
-      const target = this.extractTarget(testCase);
-      steps.push({
-        description: `Verify ${target} is displayed`,
-        code: `await driver.$('~${target}').waitForDisplayed({ timeout: 5000 });`
-      });
-    }
+      if (/wait/.test(lower)) {
+        const waitTime = this.extractWaitTime(line);
+        steps.push({ description: `Wait for ${waitTime}ms`, code: `await driver.pause(${waitTime});` });
+        continue;
+      }
 
-    // Exit/close actions
-    if (testCaseLower.includes('exit') || testCaseLower.includes('close') || testCaseLower.includes('back')) {
-      steps.push({
-        description: 'Go back or exit',
-        code: `await driver.back();`
-      });
-    }
+      if (/(click|tap|open|navigate\s*to|go\s*to)/.test(lower)) {
+        const target = this.extractTarget(line) || 'element';
+        addClick(target);
+        continue;
+      }
 
-    // If no specific actions found, create a generic click action
-    if (steps.length === 0) {
-      const target = this.extractTarget(testCase) || 'main_element';
-      steps.push({
-        description: `Click on ${target}`,
-        code: `await driver.$('~${target}').click();`
-      });
+      if (/(type|enter|input)/.test(lower)) {
+        const target = this.extractTarget(line) || 'input';
+        const value = this.extractValue(line);
+        steps.push({ description: `Enter text in ${target}`,
+          code: `await driver.$('~${target}').setValue('${value}');` });
+        continue;
+      }
+
+      if (/(verify|check|confirm)/.test(lower)) {
+        const target = this.extractTarget(line) || 'element';
+        steps.push({ description: `Verify ${target} is displayed`,
+          code: `await driver.$('~${target}').waitForDisplayed({ timeout: 5000 });` });
+        continue;
+      }
+
+      // Fallback: treat as click on the phrase
+      const target = this.extractTarget(line) || line.trim();
+      addClick(target);
     }
 
     return steps;
   }
 
   extractTarget(testCase) {
-    // Extract target element from test case
+    // Extract target phrase after common verbs, allow spaces
     const patterns = [
-      /click on (\w+)/i,
-      /tap on (\w+)/i,
-      /click (\w+)/i,
-      /tap (\w+)/i,
-      /navigate to (\w+)/i,
-      /go to (\w+)/i,
-      /open (\w+)/i,
-      /verify (\w+)/i,
-      /check (\w+)/i,
-      /enter text in (\w+)/i,
-      /type in (\w+)/i
+      /click\s+(?:on\s+)?(.+)/i,
+      /tap\s+(?:on\s+)?(.+)/i,
+      /navigate\s+to\s+(.+)/i,
+      /go\s+to\s+(.+)/i,
+      /open\s+(.+)/i,
+      /verify\s+(.+)/i,
+      /check\s+(.+)/i,
+      /enter\s+text\s+in\s+(.+)/i,
+      /type\s+in\s+(.+)/i
     ];
 
     for (const pattern of patterns) {
-      const match = testCase.match(pattern);
-      if (match) {
-        return match[1];
+      const match = String(testCase).match(pattern);
+      if (match && match[1]) {
+        return match[1]
+          .replace(/^"|"$/g, '')
+          .replace(/^'|'$/g, '')
+          .replace(/[\.]$/g, '')
+          .trim();
       }
     }
 
-    // If no pattern matches, try to extract any word that might be a target
-    const words = testCase.split(' ').filter(word => word.length > 3);
-    return words[0] || 'element';
+    // Default: take significant words
+    const tokens = String(testCase).split(/\s+/).filter(w => w && !/(click|tap|on|the|a|to|navigate|go|open)/i.test(w));
+    return tokens.join(' ').trim();
   }
 
   extractValue(testCase) {
