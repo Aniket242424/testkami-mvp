@@ -14,7 +14,7 @@ class AppiumService {
     
     // Emulator configuration
     this.avdName = 'Manastik_Medico';
-    this.appiumServerUrl = 'http://localhost:4723';
+    this.appiumServerUrl = 'http://127.0.0.1:4723';
     
     // Ensure screenshots directory exists
     fs.ensureDirSync(this.screenshotsDir);
@@ -233,7 +233,7 @@ class AppiumService {
       console.log('🔧 Appium capabilities:', JSON.stringify(capabilities, null, 2));
       
       this.driver = await remote({
-        hostname: 'localhost',
+        hostname: '127.0.0.1',
         port: 4723,
         path: '/wd/hub',
         capabilities: capabilities,
