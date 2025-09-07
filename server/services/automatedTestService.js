@@ -237,9 +237,13 @@ class AutomatedTestService {
         try {
           console.log(`📝 Executing step ${i + 1}: ${step.description}`);
           logs.push(`Executing step ${i + 1}: ${step.description}`);
-          
-          // Execute the step code
-          await this.executeStepCode(step.code, driver);
+
+          // Execute structured step if available, otherwise eval fallback
+          if (step.type) {
+            await this.executeParsedStep(driver, step);
+          } else {
+            await this.executeStepCode(step.code, driver);
+          }
           
           const stepDuration = Date.now() - stepStartTime;
           
@@ -308,48 +312,169 @@ class AutomatedTestService {
 
   parseScriptToSteps(script) {
     const steps = [];
-    
-    // Parse the script to extract meaningful steps
-    const lines = script.split('\n');
-    let currentStep = null;
-    
-    for (const line of lines) {
-      const trimmedLine = line.trim();
-      
-      // Look for step indicators
-      if (trimmedLine.includes('// Step') || (trimmedLine.includes('console.log') && trimmedLine.includes('Step'))) {
-        if (currentStep) {
-          steps.push(currentStep);
+
+    // 1) Extract explicit actions directly
+    // Clicks
+    const clickRegex = /await\s+driver\.\$\((['"`])([^'"`]+)\1\)\.click\(\)/g;
+    let clickMatch;
+    while ((clickMatch = clickRegex.exec(script)) !== null) {
+      const locator = clickMatch[2];
+      steps.push({ type: 'click', locator, description: `Click on ${locator.replace(/^~/,'')}` });
+    }
+
+    // setValue
+    const setValueRegex = /await\s+driver\.\$\((['"`])([^'"`]+)\1\)\.setValue\((['"`])([^'"`]+)\3\)/g;
+    let setValueMatch;
+    while ((setValueMatch = setValueRegex.exec(script)) !== null) {
+      const locator = setValueMatch[2];
+      const value = setValueMatch[4];
+      steps.push({ type: 'setValue', locator, value, description: `Set value on ${locator.replace(/^~/,'')}` });
+    }
+
+    // pause
+    const pauseRegex = /await\s+driver\.pause\((\d+)\)/g;
+    let pauseMatch;
+    while ((pauseMatch = pauseRegex.exec(script)) !== null) {
+      const ms = parseInt(pauseMatch[1], 10);
+      steps.push({ type: 'pause', value: ms, description: `Wait ${ms}ms` });
+    }
+
+    // 2) If none extracted, fallback to previous step grouping
+    if (steps.length === 0) {
+      const lines = script.split('\n');
+      let currentStep = null;
+      for (const line of lines) {
+        const trimmedLine = line.trim();
+        if (trimmedLine.includes('// Step') || (trimmedLine.includes('console.log') && trimmedLine.includes('Step'))) {
+          if (currentStep) steps.push(currentStep);
+          const stepMatch = trimmedLine.match(/Step \d+: (.+)/);
+          const description = stepMatch ? stepMatch[1] : 'Execute test step';
+          currentStep = { description, code: trimmedLine };
+        } else if (currentStep && trimmedLine) {
+          currentStep.code += '\n' + trimmedLine;
         }
-        
-        // Extract step description
-        const stepMatch = trimmedLine.match(/Step \d+: (.+)/);
-        const description = stepMatch ? stepMatch[1] : 'Execute test step';
-        
-        currentStep = {
-          description,
-          code: trimmedLine
-        };
-      } else if (currentStep && trimmedLine) {
-        // Add code to current step
-        currentStep.code += '\n' + trimmedLine;
+      }
+      if (currentStep) steps.push(currentStep);
+      if (steps.length === 0) steps.push({ description: 'Execute test script', code: script });
+    }
+
+    return steps;
+  }
+
+  async executeParsedStep(driver, step) {
+    const timeoutMs = 10000;
+    const maxRetries = 3;
+
+    // Dismiss any system popups before each step
+    await this.dismissSystemPopups(driver);
+
+    switch (step.type) {
+      case 'click': {
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+          try {
+            const el = await this.findElementSmart(driver, step.locator, timeoutMs);
+            await el.click();
+            return;
+          } catch (err) {
+            if (attempt === maxRetries) throw err;
+            await this.dismissSystemPopups(driver);
+            await driver.pause(800 * attempt);
+          }
+        }
+        return;
+      }
+      case 'setValue': {
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+          try {
+            const el = await this.findElementSmart(driver, step.locator, timeoutMs);
+            await el.clearValue?.();
+            await el.setValue(step.value ?? '');
+            return;
+          } catch (err) {
+            if (attempt === maxRetries) throw err;
+            await this.dismissSystemPopups(driver);
+            await driver.pause(800 * attempt);
+          }
+        }
+        return;
+      }
+      case 'pause': {
+        await driver.pause(Number(step.value) || 1000);
+        return;
+      }
+      default: {
+        return;
       }
     }
-    
-    // Add the last step
-    if (currentStep) {
-      steps.push(currentStep);
+  }
+
+  async findElementSmart(driver, locator, timeoutMs = 8000) {
+    // Prefer WDIO string selector strategies to avoid unsupported locator issues
+    const candidates = [];
+
+    if (locator.startsWith('~')) {
+      const name = locator.slice(1);
+      candidates.push(() => driver.$(`~${name}`));
+      candidates.push(() => driver.$(`android=new UiSelector().text("${name}")`));
+      candidates.push(() => driver.$(`android=new UiSelector().description("${name}")`));
+    } else {
+      // XPath if provided
+      if (locator.startsWith('//') || locator.startsWith('(')) {
+        candidates.push(() => driver.$(locator));
+      }
+
+      // Resource-id like com.app:id/foo
+      if (/^[\w.]+:id\//.test(locator)) {
+        candidates.push(() => driver.$(`android=new UiSelector().resourceId("${locator}")`));
+      }
+
+      // Text / contains / desc
+      candidates.push(() => driver.$(`android=new UiSelector().text("${locator}")`));
+      candidates.push(() => driver.$(`android=new UiSelector().textContains("${locator}")`));
+      candidates.push(() => driver.$(`android=new UiSelector().description("${locator}")`));
+      candidates.push(() => driver.$(`android=new UiSelector().descriptionContains("${locator}")`));
     }
-    
-    // If no steps found, create a generic step
-    if (steps.length === 0) {
-      steps.push({
-        description: 'Execute test script',
-        code: script
-      });
+
+    let lastError;
+    for (const getEl of candidates) {
+      try {
+        const el = await getEl();
+        await el.waitForExist({ timeout: timeoutMs });
+        await el.waitForDisplayed({ timeout: timeoutMs }).catch(() => {});
+        return el;
+      } catch (err) {
+        lastError = err;
+      }
     }
-    
-    return steps;
+    throw lastError || new Error(`Element not found: ${locator}`);
+  }
+
+  async dismissSystemPopups(driver) {
+    const labels = [
+      'Close app', 'Wait', 'OK', 'Allow', 'ALLOW', 'Continue', 'Cancel', 'Got it',
+      'ALLOW ONLY WHILE USING THE APP', 'WHILE USING THE APP', "Don't allow",
+    ];
+
+    try {
+      for (const text of labels) {
+        try {
+          const el = await driver.$(`android=new UiSelector().text("${text}")`);
+          if (await el.isExisting()) {
+            await el.click();
+            await driver.pause(300);
+            continue;
+          }
+        } catch {}
+        try {
+          const el2 = await driver.$(`android=new UiSelector().textContains("${text}")`);
+          if (await el2.isExisting()) {
+            await el2.click();
+            await driver.pause(300);
+            continue;
+          }
+        } catch {}
+      }
+    } catch {}
   }
 
   async executeStepCode(stepCode, driver) {
@@ -373,13 +498,28 @@ class AutomatedTestService {
   }
 
   sanitizeCode(code) {
+    // Remove wrappers and potentially unsafe code so we can execute isolated step lines
+    let cleaned = code;
+
+    // Strip common wrappers produced by generators
+    cleaned = cleaned.replace(/async\s+function\s+executeTest\s*\([^)]*\)\s*\{[\s\S]*?\n/g, ''); // remove function header
+    cleaned = cleaned.replace(/\n\}\s*$/g, ''); // trailing closing brace
+    cleaned = cleaned.replace(/executeTest\s*\(\s*\)\s*;?/g, ''); // function invoker
+
+    // Remove try/catch blocks that may be split across steps
+    cleaned = cleaned.replace(/\btry\s*\{?/g, '');
+    cleaned = cleaned.replace(/\}\s*catch\s*\([^)]*\)\s*\{[\s\S]*?\}/g, ''); // entire catch block
+    cleaned = cleaned.replace(/^\s*}\s*catch\b.*$/gm, ''); // orphan catch lines
+
     // Remove potentially dangerous code and replace with safe alternatives
-    return code
+    cleaned = cleaned
       .replace(/eval\(/g, '// eval(')
       .replace(/require\(/g, '// require(')
       .replace(/process\./g, '// process.')
       .replace(/__dirname/g, '// __dirname')
       .replace(/__filename/g, '// __filename');
+
+    return cleaned;
   }
 
   async takeScreenshot(driver, filename) {
