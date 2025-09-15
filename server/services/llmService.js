@@ -3,31 +3,48 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 class LLMService {
   constructor() {
     this.genAI = null;
-    // Temporarily disable Gemini API to test emulator functionality
-    console.log('⚠️ Gemini API temporarily disabled for emulator testing');
-    console.log('🔄 Using intelligent fallback script generation only');
+    const useGemini = String(process.env.USE_GEMINI || '').toLowerCase() === 'true';
+    if (useGemini && process.env.GEMINI_API_KEY) {
+      try {
+        this.genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+        console.log('✅ Gemini API enabled for test generation');
+      } catch (e) {
+        console.log('⚠️ Failed to initialize Gemini. Falling back to local parsing.');
+        this.genAI = null;
+      }
+    } else {
+      console.log('ℹ️ Gemini disabled or API key missing. Using fallback generator.');
+    }
   }
 
-  initializeGemini() {
-    // Temporarily skip Gemini initialization
-    console.log('⚠️ Skipping Gemini API initialization for emulator testing');
-  }
+  initializeGemini() {}
 
   async generateTestScript(testCase, platform) {
     try {
       console.log(`🤖 Generating test script for: "${testCase}" (${platform})`);
-      
-      // Skip Gemini API entirely and go straight to fallback
-      console.log('🔄 Using intelligent fallback script generation...');
-      
+      if (this.genAI) {
+        try {
+          const modelName = process.env.GEMINI_MODEL || 'gemini-1.5-pro';
+          const model = this.genAI.getGenerativeModel({ model: modelName });
+          const prompt = `Convert the following natural language mobile test into a concise WebdriverIO Appium script.\n` +
+            `- Platform: ${platform}\n` +
+            `- Prefer driver.$('~ACCESSIBILITY') for accessibility labels; otherwise use driver.$(\"android=new UiSelector().text(\\\"TEXT\\\")\").\n` +
+            `- Include short waits (driver.pause(500-1000)) between actions.\n` +
+            `- Only output executable JS containing an async function executeTest() { ... } and a call to executeTest();\n` +
+            `Test Steps:\n${testCase}`;
+          const res = await model.generateContent(prompt);
+          const text = (res && res.response && res.response.text) ? res.response.text() : '';
+          if (text && text.includes('executeTest')) {
+            return { success: true, code: text, source: 'gemini' };
+          }
+          console.log('⚠️ Gemini returned no executable script. Falling back.');
+        } catch (e) {
+          console.log('⚠️ Gemini generation failed, using fallback:', e.message);
+        }
+      }
+
       const script = this.generateFallbackScript(testCase, platform);
-      
-      return {
-        success: true,
-        code: script,
-        source: 'fallback-intelligent'
-      };
-      
+      return { success: true, code: script, source: this.genAI ? 'gemini-fallback' : 'fallback-intelligent' };
     } catch (error) {
       console.error('❌ Test script generation failed:', error);
       throw new Error(`Failed to generate test script: ${error.message}`);
@@ -35,12 +52,7 @@ class LLMService {
   }
 
   generateFallbackScript(testCase, platform) {
-    // Parse the test case to understand what action is needed
-    const testCaseLower = testCase.toLowerCase();
-    
-    // Extract common actions from natural language
     const actions = this.parseNaturalLanguageToSteps(testCase);
-    
     let script = `
 // Generated test script for: "${testCase}"
 // Platform: ${platform}
@@ -48,31 +60,25 @@ class LLMService {
 async function executeTest() {
   try {
     console.log('🧪 Starting test execution...');
-    
-    // Wait for app to load
     await driver.pause(3000);
-    
 `;
 
-    // Add specific actions based on parsed steps
     actions.forEach((action, index) => {
       script += `
     // Step ${index + 1}: ${action.description}
     ${action.code}
-    await driver.pause(1000);
+    await driver.pause(800);
 `;
     });
 
     script += `
     console.log('✅ Test completed successfully');
-    
   } catch (error) {
     console.error('❌ Test failed:', error.message);
     throw error;
   }
 }
 
-// Execute the test
 executeTest();
 `;
 
@@ -82,7 +88,6 @@ executeTest();
   parseNaturalLanguageToSteps(testCase) {
     const steps = [];
 
-    // Split into lines/commands
     const parts = String(testCase)
       .split(/\r?\n|;|\.|\u2022|\-/)
       .map(s => s.trim())
@@ -93,10 +98,11 @@ executeTest();
       code: `await driver.$('~${target}').click();`
     });
 
-    for (const line of (parts.length ? parts : [testCase])) {
+    for (const lineRaw of (parts.length ? parts : [testCase])) {
+      const line = lineRaw.trim();
       const lower = line.toLowerCase();
 
-      if (/(go\s*back|back)/i.test(lower)) {
+      if (/back\s*button/.test(lower) || /(go\s*back|back)\b/.test(lower)) {
         steps.push({ description: 'Go back', code: `await driver.back();` });
         continue;
       }
@@ -113,22 +119,42 @@ executeTest();
         continue;
       }
 
-      if (/(type|enter|input)/.test(lower)) {
-        const target = this.extractTarget(line) || 'input';
+      if (/(^enter\b|^type\b|\binput\b)/.test(lower)) {
+        // Support formats like: Enter Text - "value" or Enter "value"
         const value = this.extractValue(line);
-        steps.push({ description: `Enter text in ${target}`,
-          code: `await driver.$('~${target}').setValue('${value}');` });
+        const target = this.extractTarget(line);
+        const resolvedTarget = (!target || /^text(field)?$/i.test(target)) ? 'input' : target;
+        steps.push({ description: `Enter text`, code: `await driver.$('~${resolvedTarget}').setValue('${value}');` });
         continue;
       }
 
       if (/(verify|check|confirm)/.test(lower)) {
-        const target = this.extractTarget(line) || 'element';
-        steps.push({ description: `Verify ${target} is displayed`,
-          code: `await driver.$('~${target}').waitForDisplayed({ timeout: 5000 });` });
+        const quoted = this.extractValue(line);
+        if (quoted) {
+          // For text verification, check if it's in an input field or as displayed text
+          steps.push({ 
+            description: `Verify ${quoted} is displayed`,
+            type: 'verify',
+            target: quoted,
+            code: `// Check if text is in input field or displayed as text
+const inputField = await driver.$("android=new UiSelector().className(\"android.widget.EditText\")");
+const inputText = await inputField.getText();
+if (inputText.includes("${quoted}")) {
+  console.log("✅ Text found in input field:", inputText);
+} else {
+  // Try to find as displayed text
+  await driver.$("android=new UiSelector().textContains(\"${quoted}\")").waitForDisplayed({ timeout: 5000 });
+  console.log("✅ Text found as displayed element");
+}`
+          });
+        } else {
+          const target = this.extractTarget(line) || 'element';
+          steps.push({ description: `Verify ${target} is displayed`,
+            code: `await driver.$('~${target}').waitForDisplayed({ timeout: 5000 });` });
+        }
         continue;
       }
 
-      // Fallback: treat as click on the phrase
       const target = this.extractTarget(line) || line.trim();
       addClick(target);
     }
@@ -137,7 +163,6 @@ executeTest();
   }
 
   extractTarget(testCase) {
-    // Extract target phrase after common verbs, allow spaces
     const patterns = [
       /click\s+(?:on\s+)?(.+)/i,
       /tap\s+(?:on\s+)?(.+)/i,
@@ -146,6 +171,7 @@ executeTest();
       /open\s+(.+)/i,
       /verify\s+(.+)/i,
       /check\s+(.+)/i,
+      /enter\s+text\s*(?:-|:)\s*([^"]+)/i,
       /enter\s+text\s+in\s+(.+)/i,
       /type\s+in\s+(.+)/i
     ];
@@ -161,49 +187,44 @@ executeTest();
       }
     }
 
-    // Default: take significant words
-    const tokens = String(testCase).split(/\s+/).filter(w => w && !/(click|tap|on|the|a|to|navigate|go|open)/i.test(w));
+    const tokens = String(testCase).split(/\s+/).filter(w => w && !/(click|tap|on|the|a|to|navigate|go|open|enter|text|type|input|verify|check)/i.test(w));
     return tokens.join(' ').trim();
   }
 
   extractValue(testCase) {
-    // Extract value for input actions
     const patterns = [
-      /enter "([^"]+)"/i,
-      /type "([^"]+)"/i,
-      /input "([^"]+)"/i,
-      /enter '([^']+)'/i,
-      /type '([^']+)'/i,
-      /input '([^']+)'/i
+      /enter\s+"([^"]+)"/i,
+      /type\s+"([^"]+)"/i,
+      /input\s+"([^"]+)"/i,
+      /enter\s+'([^']+)'/i,
+      /type\s+'([^']+)'/i,
+      /input\s+'([^']+)'/i,
+      /enter\s+text\s*(?:-|:)\s*"([^"]+)"/i,
+      /enter\s+text\s*(?:-|:)\s*'([^']+)'/i
     ];
 
     for (const pattern of patterns) {
-      const match = testCase.match(pattern);
-      if (match) {
-        return match[1];
-      }
+      const match = String(testCase).match(pattern);
+      if (match) return match[1];
     }
 
-    return 'test_value';
+    return '';
   }
 
   extractWaitTime(testCase) {
-    // Extract wait time from test case
     const patterns = [
-      /wait (\d+) seconds?/i,
-      /wait (\d+)s/i,
-      /wait for (\d+) seconds?/i,
-      /wait for (\d+)s/i
+      /wait\s+(\d+)\s*seconds?/i,
+      /wait\s+(\d+)s/i,
+      /wait\s*for\s+(\d+)\s*seconds?/i,
+      /wait\s*for\s+(\d+)s/i
     ];
 
     for (const pattern of patterns) {
       const match = testCase.match(pattern);
-      if (match) {
-        return parseInt(match[1]) * 1000; // Convert to milliseconds
-      }
+      if (match) return parseInt(match[1]) * 1000;
     }
 
-    return 2000; // Default wait time
+    return 2000;
   }
 }
 

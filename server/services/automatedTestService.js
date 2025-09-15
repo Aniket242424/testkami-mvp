@@ -10,6 +10,8 @@ const emailService = require('./emailService');
 class AutomatedTestService {
   constructor() {
     this.executionId = null;
+    this.globalDeadline = null;
+    this.pendingSetValueCount = 0;
   }
 
   async executeFullTest(testData) {
@@ -29,6 +31,7 @@ class AutomatedTestService {
         testData.naturalLanguageTest,
         testData.platform
       );
+      console.log(`🧠 Script source: ${scriptResult?.source || 'unknown'}`);
       
       logger.info('🧪 Test', 'Script Generation - Completed', { executionId });
       
@@ -40,9 +43,10 @@ class AutomatedTestService {
       
       logger.info('📱 Emulator', 'Emulator and app launched successfully', { executionId });
       
-      // Step 3: Execute test script
+      // Step 3: Execute test script (set global 60s deadline)
       console.log('🧪 Step 3: Executing test script...');
       logger.info('🧪 Test', 'Test Execution - Started', { executionId });
+      this.globalDeadline = Date.now() + 90000; // 90s total for execution
       
       const testResult = await this.executeTestScript(scriptResult, emulatorResult.driver, executionId);
       
@@ -100,6 +104,8 @@ class AutomatedTestService {
       }
       
       throw error;
+    } finally {
+      this.globalDeadline = null;
     }
   }
 
@@ -228,11 +234,34 @@ class AutomatedTestService {
       const logs = [];
       
       // Parse the generated script to extract steps
-      const testSteps = this.parseScriptToSteps(scriptResult.script || scriptResult.code);
+      const parsed = this.parseScriptToSteps(scriptResult.script || scriptResult.code);
+
+      // Reorder: ensure any setValue appears right after "TextFields" click
+      const textFieldsIdx = parsed.findIndex(s => (s.type === 'click' && (String(s.locator).toLowerCase().includes('textfield') || String(s.description || '').toLowerCase().includes('textfield'))));
+      const firstSetIdx = parsed.findIndex(s => s.type === 'setValue');
+      if (textFieldsIdx >= 0 && firstSetIdx >= 0 && firstSetIdx > textFieldsIdx + 1) {
+        const [sv] = parsed.splice(firstSetIdx, 1);
+        parsed.splice(textFieldsIdx + 1, 0, sv);
+      }
+
+      // Count pending text entries for guard
+      this.pendingSetValueCount = parsed.filter(s => s.type === 'setValue').length;
+
+      // Print a clear, concise step plan before execution
+      const plannedSteps = parsed.map((s, idx) => `${idx + 1}. ${s.description || s.type || 'Step'} (${s.type || 'code'})`);
+      console.log('🗺️ Planned Steps:\n' + plannedSteps.join('\n'));
+      console.log('🔍 Step details:', JSON.stringify(parsed, null, 2));
+      logs.push('Planned Steps:');
+      plannedSteps.forEach(s => logs.push(s));
       
-      for (let i = 0; i < testSteps.length; i++) {
-        const step = testSteps[i];
+      for (let i = 0; i < parsed.length; i++) {
+        const step = parsed[i];
         const stepStartTime = Date.now();
+        
+        // Global timeout check
+        if (this.globalDeadline && Date.now() >= this.globalDeadline) {
+          throw new Error('Global execution timeout reached (90000ms)');
+        }
         
         try {
           console.log(`📝 Executing step ${i + 1}: ${step.description}`);
@@ -243,6 +272,11 @@ class AutomatedTestService {
             await this.executeParsedStep(driver, step);
           } else {
             await this.executeStepCode(step.code, driver);
+          }
+
+          // Decrement guard when setValue succeeds
+          if (step.type === 'setValue' && this.pendingSetValueCount > 0) {
+            this.pendingSetValueCount -= 1;
           }
           
           const stepDuration = Date.now() - stepStartTime;
@@ -287,7 +321,8 @@ class AutomatedTestService {
           console.error(`❌ Step ${i + 1} failed:`, stepError.message);
           logs.push(`Step ${i + 1} failed: ${stepError.message}`);
           
-          // Continue with next step instead of stopping
+          // Abort remaining steps on failure
+          throw stepError;
         }
       }
       
@@ -313,44 +348,54 @@ class AutomatedTestService {
   parseScriptToSteps(script) {
     const steps = [];
 
-    // 1) Extract explicit actions directly
-    // Clicks
-    const clickRegex = /await\s+driver\.\$\((['"`])([^'"`]+)\1\)\.click\(\)/g;
+    // 1) Extract explicit actions directly (more tolerant regexes)
+    const clickRegex = /(?:await\s+)?driver\.\$\((['"`])([^'"`]+)\1\)\.click\(\)/g;
     let clickMatch;
     while ((clickMatch = clickRegex.exec(script)) !== null) {
-      const locator = clickMatch[2];
-      steps.push({ type: 'click', locator, description: `Click on ${locator.replace(/^~/,'')}` });
+      const locatorRaw = clickMatch[2];
+      const locator = this.normalizeTarget(locatorRaw);
+      steps.push({ type: 'click', locator, description: `Click on ${locator}` });
     }
 
-    // setValue
-    const setValueRegex = /await\s+driver\.\$\((['"`])([^'"`]+)\1\)\.setValue\((['"`])([^'"`]+)\3\)/g;
+    const setValueRegex = /(?:await\s+)?driver\.\$\((['"`])([^'"`]+)\1\)\.setValue\((['"`])([^'"`]+)\3\)/g;
     let setValueMatch;
     while ((setValueMatch = setValueRegex.exec(script)) !== null) {
-      const locator = setValueMatch[2];
+      const locatorRaw = setValueMatch[2];
       const value = setValueMatch[4];
-      steps.push({ type: 'setValue', locator, value, description: `Set value on ${locator.replace(/^~/,'')}` });
+      const locator = this.normalizeTarget(locatorRaw);
+      steps.push({ type: 'setValue', locator, value, description: `Set value on ${locator}` });
     }
 
-    // pause
-    const pauseRegex = /await\s+driver\.pause\((\d+)\)/g;
+    const pauseRegex = /(?:await\s+)?driver\.pause\((\d+)\)/g;
     let pauseMatch;
     while ((pauseMatch = pauseRegex.exec(script)) !== null) {
       const ms = parseInt(pauseMatch[1], 10);
       steps.push({ type: 'pause', value: ms, description: `Wait ${ms}ms` });
     }
 
-    // back
-    const backRegex = /await\s+driver\.back\(\)/g;
-    if (backRegex.test(script)) {
-      // reset regex and collect all
-      backRegex.lastIndex = 0;
-      let m;
-      while ((m = backRegex.exec(script)) !== null) {
-        steps.push({ type: 'back', description: 'Go back' });
+    const backRegex = /(?:await\s+)?driver\.back\(\)/g;
+    let backMatch;
+    while ((backMatch = backRegex.exec(script)) !== null) {
+      steps.push({ type: 'back', description: 'Go back' });
+    }
+
+    // Inject setValue if NL indicates entry
+    const nlEnterRegexes = [
+      /Enter\s+Text\s*(?:-|:)\s*"([^"]+)"/i,
+      /Enter\s+Text\s*(?:-|:)\s*'([^']+)'/i,
+      /\bEnter\s+"([^"]+)"/i,
+      /\bEnter\s+'([^']+)'/i,
+      /\bType\s+"([^"]+)"/i,
+      /\bType\s+'([^']+)'/i
+    ];
+    for (const rx of nlEnterRegexes) {
+      const m = script.match(rx);
+      if (m && m[1]) {
+        steps.push({ type: 'setValue', locator: 'input', value: m[1], description: `Enter text` });
+        break;
       }
     }
 
-    // 2) If none extracted, fallback to previous step grouping
     if (steps.length === 0) {
       const lines = script.split('\n');
       let currentStep = null;
@@ -373,17 +418,20 @@ class AutomatedTestService {
   }
 
   async executeParsedStep(driver, step) {
-    const timeoutMs = 10000;
-    const maxRetries = 3;
+    // Respect remaining global time
+    const remainingGlobal = this.globalDeadline ? Math.max(0, this.globalDeadline - Date.now()) : 60000;
+    const timeoutMs = Math.min(60000, remainingGlobal);
+    const maxRetries = 2; // keep retries minimal to honor global timeout
 
-    // Dismiss any system popups before each step
-    await this.dismissSystemPopups(driver);
+    // Do not auto-dismiss popups before steps to avoid unintended navigation
 
     switch (step.type) {
       case 'click': {
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
           try {
-            const el = await this.findElementSmart(driver, step.locator, timeoutMs);
+            const target = this.normalizeTarget(step.locator);
+            const el = await this.findElementSmart(driver, target, timeoutMs);
+            console.log(`➡️ Click: ${target}`);
             await el.click();
             return;
           } catch (err) {
@@ -397,9 +445,154 @@ class AutomatedTestService {
       case 'setValue': {
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
           try {
-            const el = await this.findElementSmart(driver, step.locator, timeoutMs);
-            await el.clearValue?.();
-            await el.setValue(step.value ?? '');
+            const target = this.normalizeTarget(step.locator);
+            let el;
+
+            const waitForField = async (candidate) => {
+              await candidate.waitForExist({ timeout: 10000 });
+              await candidate.waitForDisplayed({ timeout: 10000 }).catch(() => {});
+              return candidate;
+            };
+
+            if (!target || /^(input|text|textfield|edit|enter)$/i.test(target)) {
+              // 1) Try to find a visible, empty EditText field first
+              try {
+                const allEditTexts = await driver.$$('android=new UiSelector().className("android.widget.EditText")');
+                console.log(`🔍 Found ${allEditTexts.length} EditText fields`);
+                
+                // Look for an empty, visible field
+                for (let i = 0; i < allEditTexts.length; i++) {
+                  const field = allEditTexts[i];
+                  try {
+                    const isDisplayed = await field.isDisplayed();
+                    const text = await field.getText();
+                    console.log(`📝 Field ${i + 1}: displayed=${isDisplayed}, text="${text}"`);
+                    
+                    if (isDisplayed && (!text || text.trim() === '' || text === 'hint text')) {
+                      el = field;
+                      console.log(`✅ Selected empty field ${i + 1} for text entry`);
+                      break;
+                    }
+                  } catch (err) {
+                    console.log(`⚠️ Could not check field ${i + 1}: ${err.message}`);
+                  }
+                }
+                
+                // If no empty field found, use the first visible one
+                if (!el) {
+                  for (let i = 0; i < allEditTexts.length; i++) {
+                    const field = allEditTexts[i];
+                    try {
+                      if (await field.isDisplayed()) {
+                        el = field;
+                        console.log(`✅ Selected first visible field ${i + 1} for text entry`);
+                        break;
+                      }
+                    } catch (err) {}
+                  }
+                }
+              } catch (err) {
+                console.log(`⚠️ Could not find EditText fields: ${err.message}`);
+              }
+              
+              // Fallback to original logic if above failed
+              if (!el) {
+                // 1) Focused EditText
+                el = await driver.$('android=new UiSelector().className("android.widget.EditText").focused(true)');
+                if (!(await el.isExisting())) {
+                  // 2) First EditText by class
+                  el = await driver.$('android=new UiSelector().className("android.widget.EditText")');
+                }
+                if (!(await el.isExisting())) {
+                  // 3) XPath fallback
+                  el = await driver.$('//android.widget.EditText');
+                }
+                if (!(await el.isExisting())) {
+                  // 4) Scroll into view by class
+                  try {
+                    el = await driver.$('android=new UiScrollable(new UiSelector().scrollable(true)).scrollIntoView(new UiSelector().className("android.widget.EditText"))');
+                  } catch {}
+                }
+              }
+              if (!(await el.isExisting())) {
+                // 5) Tap common row and retry (TextFields -> EditText example)
+                try {
+                  const row = await driver.$('android=new UiSelector().textContains("EditText")');
+                  if (await row.isExisting()) {
+                    console.log('➡️ Opening EditText example row');
+                    await row.click();
+                    await driver.pause(500);
+                  }
+                } catch {}
+                // Retry focused/class/xpath after opening
+                el = await driver.$('android=new UiSelector().className("android.widget.EditText").focused(true)');
+                if (!(await el.isExisting())) el = await driver.$('android=new UiSelector().className("android.widget.EditText")');
+                if (!(await el.isExisting())) el = await driver.$('//android.widget.EditText');
+              }
+            } else {
+              el = await this.findElementSmart(driver, target, timeoutMs);
+            }
+
+            // Final guard: wait up to 10s for the field
+            el = await waitForField(el);
+
+            try { await el.click(); } catch {}
+            await driver.pause(200);
+            const valueToType = String(step.value ?? '');
+            console.log(`✏️ Entering text: "${valueToType}"`);
+            
+            // Click the field to focus it
+            await el.click();
+            await driver.pause(500); // Wait for field to focus
+            console.log(`🎯 Field clicked and focused`);
+            
+            // Clear any existing text and enter new text
+            try { 
+              await el.clearValue(); 
+              console.log(`🧹 Cleared existing text`);
+            } catch (err) {
+              console.log(`⚠️ Could not clear field: ${err.message}`);
+            }
+            
+            console.log(`⌨️ Typing: "${valueToType}"`);
+            
+            // Try multiple text entry methods
+            try {
+              await el.setValue(valueToType);
+              console.log(`✅ Text entry completed with setValue`);
+            } catch (err) {
+              console.log(`⚠️ setValue failed, trying sendKeys: ${err.message}`);
+              try {
+                await el.addValue(valueToType);
+                console.log(`✅ Text entry completed with addValue`);
+              } catch (err2) {
+                console.log(`⚠️ addValue failed, trying direct input: ${err2.message}`);
+                // Last resort: use driver keys
+                await driver.keys(valueToType);
+                console.log(`✅ Text entry completed with driver.keys`);
+              }
+            }
+            
+            // Wait a moment for UI to update
+            await driver.pause(1000);
+            
+            // Read back and verify
+            let typed = '';
+            try { typed = await el.getText(); } catch {}
+            if (!typed) {
+              try { typed = await el.getAttribute('text'); } catch {}
+            }
+            if (!typed) {
+              try { typed = await el.getAttribute('content-desc'); } catch {}
+            }
+            console.log(`✅ Entered text now reads: "${typed}"`);
+            
+            // Verify text was entered correctly
+            console.log(`🔍 Verifying text entry...`);
+            
+            if (!typed || !typed.includes(valueToType)) {
+              throw new Error(`Entered text mismatch. Expected contains: "${valueToType}", Actual: "${typed}"`);
+            }
             return;
           } catch (err) {
             if (attempt === maxRetries) throw err;
@@ -414,27 +607,38 @@ class AutomatedTestService {
         return;
       }
       case 'back': {
-        // Try standard back
-        try {
-          await driver.back();
-          await driver.pause(500);
-        } catch {}
-
-        // Dismiss any popups that might block back
-        await this.dismissSystemPopups(driver);
-
-        // Fallback: Android back key via mobile command
-        try {
-          await driver.execute('mobile: pressKey', { keycode: 4 });
-          await driver.pause(400);
-        } catch {}
-
-        // Last resort: adb keyevent back
-        try {
-          await execAsync('adb shell input keyevent 4');
-          await driver.pause(300);
-        } catch {}
+        // Block back until all setValue steps complete
+        if (this.pendingSetValueCount > 0) {
+          throw new Error('Back requested before text entry completed');
+        }
+        await driver.back();
+        await driver.pause(500);
         return;
+      }
+      case 'verify': {
+        const target = step.target;
+        console.log(`🔍 Verifying: "${target}"`);
+        
+        // First try to find in input field
+        try {
+          const inputField = await driver.$("android=new UiSelector().className(\"android.widget.EditText\")");
+          const inputText = await inputField.getText();
+          if (inputText && inputText.includes(target)) {
+            console.log(`✅ Text found in input field: "${inputText}"`);
+            return;
+          }
+        } catch (err) {
+          console.log(`⚠️ Input field check failed: ${err.message}`);
+        }
+        
+        // Try to find as displayed text element
+        try {
+          await driver.$(`android=new UiSelector().textContains("${target}")`).waitForDisplayed({ timeout: 5000 });
+          console.log(`✅ Text found as displayed element`);
+          return;
+        } catch (err) {
+          throw new Error(`Verification failed: "${target}" not found in input field or as displayed text`);
+        }
       }
       default: {
         return;
@@ -442,15 +646,19 @@ class AutomatedTestService {
     }
   }
 
-  async findElementSmart(driver, locator, timeoutMs = 8000) {
+  async findElementSmart(driver, locator, timeoutMs = 60000) {
     // Prefer WDIO string selector strategies to avoid unsupported locator issues
     const candidates = [];
 
+    // Normalize to plain text target if came with '~'
+    const plain = locator.startsWith('~') ? locator.slice(1) : locator;
+
     if (locator.startsWith('~')) {
-      const name = locator.slice(1);
-      candidates.push(() => driver.$(`~${name}`));
-      candidates.push(() => driver.$(`android=new UiSelector().text("${name}")`));
-      candidates.push(() => driver.$(`android=new UiSelector().description("${name}")`));
+      candidates.push(() => driver.$(`~${plain}`));
+      candidates.push(() => driver.$(`android=new UiSelector().text("${plain}")`));
+      candidates.push(() => driver.$(`android=new UiSelector().textContains("${plain}")`));
+      candidates.push(() => driver.$(`android=new UiSelector().description("${plain}")`));
+      candidates.push(() => driver.$(`android=new UiSelector().descriptionContains("${plain}")`));
     } else {
       // XPath if provided
       if (locator.startsWith('//') || locator.startsWith('(')) {
@@ -463,28 +671,64 @@ class AutomatedTestService {
       }
 
       // Text / contains / desc
-      candidates.push(() => driver.$(`android=new UiSelector().text("${locator}")`));
-      candidates.push(() => driver.$(`android=new UiSelector().textContains("${locator}")`));
-      candidates.push(() => driver.$(`android=new UiSelector().description("${locator}")`));
-      candidates.push(() => driver.$(`android=new UiSelector().descriptionContains("${locator}")`));
+      candidates.push(() => driver.$(`android=new UiSelector().text("${plain}")`));
+      candidates.push(() => driver.$(`android=new UiSelector().textContains("${plain}")`));
+      candidates.push(() => driver.$(`android=new UiSelector().description("${plain}")`));
+      candidates.push(() => driver.$(`android=new UiSelector().descriptionContains("${plain}")`));
+      
+      // Try partial matches for common variations
+      const words = plain.split(/\s+/);
+      if (words.length > 1) {
+        // Try with first few words
+        const partial = words.slice(0, Math.min(3, words.length)).join(' ');
+        candidates.push(() => driver.$(`android=new UiSelector().textContains("${partial}")`));
+        
+        // Try with last few words
+        const lastPartial = words.slice(-Math.min(3, words.length)).join(' ');
+        candidates.push(() => driver.$(`android=new UiSelector().textContains("${lastPartial}")`));
+        
+        // Try with individual significant words
+        words.forEach(word => {
+          if (word.length > 3) { // Only try words longer than 3 characters
+            candidates.push(() => driver.$(`android=new UiSelector().textContains("${word}")`));
+          }
+        });
+      }
 
       // Scroll into view by text if not immediately present
-      candidates.push(() => driver.$(`android=new UiScrollable(new UiSelector().scrollable(true)).scrollTextIntoView("${locator}")`));
-      candidates.push(() => driver.$(`android=new UiScrollable(new UiSelector().scrollable(true)).scrollIntoView(new UiSelector().textContains("${locator}"))`));
+      candidates.push(() => driver.$(`android=new UiScrollable(new UiSelector().scrollable(true)).scrollTextIntoView("${plain}")`));
+      candidates.push(() => driver.$(`android=new UiScrollable(new UiSelector().scrollable(true)).scrollIntoView(new UiSelector().textContains("${plain}"))`));
     }
 
+    // Enforce overall deadline across strategies to avoid multi-minute waits
+    const deadline = Date.now() + timeoutMs;
     let lastError;
     for (const getEl of candidates) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) break;
+      // Per-strategy cap: at most 8s or remaining time
+      const perStrategyTimeout = Math.min(2000, Math.max(500, remaining));
       try {
         const el = await getEl();
-        await el.waitForExist({ timeout: timeoutMs });
-        await el.waitForDisplayed({ timeout: timeoutMs }).catch(() => {});
+        await el.waitForExist({ timeout: perStrategyTimeout });
+        await el.waitForDisplayed({ timeout: perStrategyTimeout }).catch(() => {});
         return el;
       } catch (err) {
         lastError = err;
+        console.log(`⚠️ Strategy failed: ${err.message}`);
       }
     }
-    throw lastError || new Error(`Element not found: ${locator}`);
+    throw new Error(`Locator not found within ${timeoutMs}ms: ${plain}`);
+  }
+
+  normalizeTarget(locator) {
+    if (!locator) return locator;
+    if (locator.startsWith('~')) locator = locator.slice(1);
+    return String(locator)
+      .replace(/\bagain\b/ig, '')
+      .replace(/\bbutton\b/ig, '')
+      .replace(/\bthe\b|\ba\b|\ban\b/ig, '')
+      .trim();
   }
 
   async dismissSystemPopups(driver) {
@@ -715,3 +959,4 @@ class AutomatedTestService {
 }
 
 module.exports = new AutomatedTestService();
+
