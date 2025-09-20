@@ -47,9 +47,9 @@
 ## 🚀 Quick Start
 
 ### 1. **Install Dependencies**
-```bash
-npm run install-all
-```
+   ```bash
+   npm run install-all
+   ```
 
 ### 2. **Configure Your AVD (Android Virtual Device)**
 ```bash
@@ -62,7 +62,7 @@ appium
 ```
 
 ### 4. **Start Testkami**
-```bash
+   ```bash
 npm start
 ```
 

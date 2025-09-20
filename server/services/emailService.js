@@ -78,7 +78,7 @@ class EmailService {
 
     } catch (error) {
       console.error('❌ Failed to send test report email:', error);
-      return {
+        return {
         success: false,
         error: error.message
       };
@@ -128,7 +128,7 @@ class EmailService {
             <p><strong>Total Steps:</strong> ${report.summary.totalSteps}</p>
             <p><strong>Passed Steps:</strong> ${report.summary.passedSteps}</p>
             <p><strong>Failed Steps:</strong> ${report.summary.failedSteps}</p>
-        </div>
+                </div>
 
         <div class="steps">
             <h2>📝 Test Steps</h2>
@@ -141,7 +141,7 @@ class EmailService {
                     ${step.error ? `<br><em>Error: ${step.error}</em>` : ''}
                 </div>
             `).join('')}
-        </div>
+                </div>
 
         ${report.screenshots.length > 0 ? `
         <div class="screenshots">
@@ -152,7 +152,7 @@ class EmailService {
                     Time: ${new Date(screenshot.timestamp).toLocaleString()}
                 </div>
             `).join('')}
-        </div>
+            </div>
         ` : ''}
 
         ${report.error ? `
@@ -211,12 +211,12 @@ Generated at: ${new Date(report.generatedAt).toLocaleString()}
 
   async prepareAttachments(report) {
     const attachments = [];
-
+    
     try {
       // Add screenshots as attachments
       for (const screenshot of report.screenshots) {
         if (await fs.pathExists(screenshot.path)) {
-          attachments.push({
+        attachments.push({
             filename: path.basename(screenshot.path),
             path: screenshot.path,
             cid: screenshot.name.replace(/\s+/g, '_')
@@ -227,7 +227,7 @@ Generated at: ${new Date(report.generatedAt).toLocaleString()}
       // Add report JSON as attachment
       const reportPath = path.join(__dirname, '../../reports', `${report.id}.json`);
       if (await fs.pathExists(reportPath)) {
-        attachments.push({
+              attachments.push({
           filename: `report_${report.id}.json`,
           path: reportPath
         });
@@ -260,10 +260,10 @@ Generated at: ${new Date(report.generatedAt).toLocaleString()}
 
     } catch (error) {
       console.error('❌ Failed to send notification email:', error);
-      return {
+    return {
         success: false,
         error: error.message
-      };
+    };
     }
   }
 }

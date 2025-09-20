@@ -5,6 +5,7 @@ const testExecutionService = require('../services/testExecutionService');
 const automatedTestService = require('../services/automatedTestService');
 const emailService = require('../services/emailService');
 const uploadController = require('../controllers/uploadController');
+const inputValidationService = require('../services/inputValidationService');
 const logger = require('../utils/logger');
 
 // Generate test script from natural language
@@ -26,7 +27,38 @@ router.post('/generate-script', async (req, res) => {
       });
     }
 
+    // 🔍 VALIDATE INPUT BEFORE GENERATING SCRIPT
+    console.log('🔍 Validating test input for script generation...');
+    const validationResult = inputValidationService.validateTestInput(naturalLanguageTest, platform);
+    
+    if (!validationResult.isValid) {
+      console.log('❌ Input validation failed for script generation:', validationResult.errors);
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid test case input',
+        message: 'Please fix the following issues before generating script:',
+        details: validationResult.errors,
+        suggestions: validationResult.suggestions,
+        confidence: validationResult.confidence,
+        detectedIssues: validationResult.detectedIssues
+      });
+    }
+
+    // Check automation suitability
+    const suitabilityResult = inputValidationService.validateAutomationSuitability(naturalLanguageTest);
+    if (!suitabilityResult.suitable) {
+      console.log('❌ Test case not suitable for automation:', suitabilityResult.reasons);
+      return res.status(400).json({
+        success: false,
+        error: 'Test case not suitable for automation',
+        message: 'This test case contains actions that cannot be automated',
+        reasons: suitabilityResult.reasons,
+        recommendations: suitabilityResult.recommendations
+      });
+    }
+
     console.log(`🤖 Generating test script for: "${naturalLanguageTest}" (${platform})`);
+    console.log(`📊 Input confidence: ${validationResult.confidence}%`);
 
     // Generate test script using LLM
     const scriptResult = await llmService.generateTestScript(naturalLanguageTest, platform);
@@ -76,6 +108,44 @@ router.post('/execute', async (req, res) => {
       return res.status(400).json({
         success: false,
         error: 'Platform is required'
+      });
+    }
+
+    // 🔍 COMPREHENSIVE INPUT VALIDATION
+    console.log('🔍 Validating test input...');
+    const validationResult = inputValidationService.validateTestInput(naturalLanguageTest, platform);
+    
+    console.log('🔍 Validation result:', JSON.stringify(validationResult, null, 2));
+    
+    if (!validationResult.isValid) {
+      console.log('❌ Input validation failed:', validationResult.errors);
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid test case input',
+        message: 'Please fix the following issues:',
+        details: validationResult.errors,
+        suggestions: validationResult.suggestions,
+        confidence: validationResult.confidence,
+        detectedIssues: validationResult.detectedIssues
+      });
+    }
+
+    // Show warnings if confidence is low but still valid
+    if (validationResult.warnings.length > 0) {
+      console.log('⚠️ Input validation warnings:', validationResult.warnings);
+      // Continue execution but log warnings
+    }
+
+    // Check automation suitability
+    const suitabilityResult = inputValidationService.validateAutomationSuitability(naturalLanguageTest);
+    if (!suitabilityResult.suitable) {
+      console.log('❌ Test case not suitable for automation:', suitabilityResult.reasons);
+      return res.status(400).json({
+        success: false,
+        error: 'Test case not suitable for automation',
+        message: 'This test case contains actions that cannot be automated',
+        reasons: suitabilityResult.reasons,
+        recommendations: suitabilityResult.recommendations
       });
     }
 
@@ -255,6 +325,48 @@ router.get('/templates', (req, res) => {
         template: 'Search for a product and verify search results are displayed',
         description: 'Test search functionality',
         platform: 'web'
+      },
+      {
+        id: 'alphanso-app-template',
+        name: 'Alphanso App Template',
+        template: 'Click on Next Button\nClick on Language Formation\nVerify Lang-Form Exercise 1:Sentence Formation displayed\nClick on Lang-Form Exercise 1:Sentence Formation\nVerify Nouns and Verb visible\nClick on Nouns on Verbs',
+        description: 'Test Alphanso app language formation exercise with sentence formation and noun/verb interaction',
+        platform: 'android'
+      },
+      {
+        id: 'api-demos-template',
+        name: 'API Demos Template',
+        template: 'Click on Views\nClick on TextFields\nEnter Text - "Aniket Appium"\nVerify "Aniket Appium" is displayed\nClick on Back button',
+        description: 'Test API Demos app text field functionality with text entry and verification',
+        platform: 'android'
+      },
+      {
+        id: 'lexical-semantics-template',
+        name: 'Lexical Semantics Template',
+        template: 'Open the App\nScroll in the Intro page\nClick on Next Button\nClick on Lexical Semantics\nClick on Lex Sem Exercise 1: Visual Identification\nClick on Picture Noun Matching\nClick on the word "spoon" (Correct answer)\nClick on Next button on this page',
+        description: 'Test Lexical Semantics app with visual identification and picture noun matching exercises',
+        platform: 'android'
+      },
+      {
+        id: 'form-validation-template',
+        name: 'Form Validation Template',
+        template: 'Click on Registration\nEnter username "testuser123"\nEnter email "test@example.com"\nEnter password "TestPass123"\nClick on Submit button\nVerify "Registration successful" message is displayed',
+        description: 'Test form validation with user registration including field validation and success verification',
+        platform: 'android'
+      },
+      {
+        id: 'navigation-menu-template',
+        name: 'Navigation Menu Template',
+        template: 'Click on Menu button\nVerify all menu items are visible\nClick on Settings\nVerify Settings page loads\nClick on Back button\nClick on Profile\nVerify Profile page loads\nClick on Back button',
+        description: 'Test app navigation through menu system with page verification and back navigation',
+        platform: 'android'
+      },
+      {
+        id: 'search-functionality-template',
+        name: 'Search Functionality Template',
+        template: 'Click on Search icon\nEnter search term "mobile app"\nClick on Search button\nVerify search results are displayed\nClick on first result\nVerify result details page loads\nClick on Back button',
+        description: 'Test search functionality with search term entry, results display, and navigation to details',
+        platform: 'android'
       }
     ];
 

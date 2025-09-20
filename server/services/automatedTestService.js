@@ -25,6 +25,8 @@ class AutomatedTestService {
       
       // Step 1: Generate test script
       console.log('📝 Step 1: Generating test script...');
+      console.log('🔍 Input testData:', JSON.stringify(testData, null, 2));
+      console.log('🔍 naturalLanguageTest:', testData.naturalLanguageTest);
       logger.info('🧪 Test', 'Script Generation - Started', { executionId });
       
       const scriptResult = await llmService.generateTestScript(
@@ -32,6 +34,7 @@ class AutomatedTestService {
         testData.platform
       );
       console.log(`🧠 Script source: ${scriptResult?.source || 'unknown'}`);
+      console.log('🔍 Generated script:', scriptResult?.code?.substring(0, 500) + '...');
       
       logger.info('🧪 Test', 'Script Generation - Completed', { executionId });
       
@@ -233,8 +236,56 @@ class AutomatedTestService {
       const screenshots = [];
       const logs = [];
       
-      // Parse the generated script to extract steps
-      const parsed = this.parseScriptToSteps(scriptResult.script || scriptResult.code);
+      // Use steps directly from LLM service if available, otherwise parse the script
+      let parsed;
+      if (scriptResult.steps && scriptResult.steps.length > 0) {
+        console.log('🔍 Using steps directly from LLM service:', scriptResult.steps.length);
+        console.log('🔍 Raw steps from LLM:', JSON.stringify(scriptResult.steps, null, 2));
+        parsed = scriptResult.steps.map(step => {
+          // Extract locator from the code if it exists
+          let locator = step.locator || step.target;
+          if (!locator && step.code) {
+            // Extract locator from code like: await driver.$('~target').click();
+            const match = step.code.match(/driver\.\$\(['"`]([^'"`]+)['"`]\)/);
+            if (match) {
+              locator = match[1];
+            }
+          }
+          
+          // If still no locator, try to extract from description
+          if (!locator && step.description) {
+            // Extract from descriptions like "Click on Next Button"
+            const descMatch = step.description.match(/Click on (.+)/i);
+            if (descMatch) {
+              locator = descMatch[1];
+            }
+          }
+          
+          // If still no locator, use a fallback based on step type
+          if (!locator) {
+            if (step.description && step.description.includes('Scroll')) {
+              locator = 'scrollable';
+            } else if (step.description && step.description.includes('Open')) {
+              locator = 'app';
+            } else {
+              locator = step.description || 'unknown';
+            }
+          }
+          
+          return {
+            type: step.type || 'click', // Keep the original type from LLM service
+            locator: locator,
+            value: step.value,
+            description: step.description
+          };
+        });
+        console.log('🔍 Final parsed steps:', JSON.stringify(parsed, null, 2));
+        console.log('🔍 Step types:', parsed.map(s => s.type));
+      } else {
+        console.log('🔍 Parsing script to extract steps...');
+        parsed = this.parseScriptToSteps(scriptResult.script || scriptResult.code);
+        console.log('🔍 Final parsed steps:', JSON.stringify(parsed, null, 2));
+      }
 
       // Reorder: ensure any setValue appears right after "TextFields" click
       const textFieldsIdx = parsed.findIndex(s => (s.type === 'click' && (String(s.locator).toLowerCase().includes('textfield') || String(s.description || '').toLowerCase().includes('textfield'))));
@@ -357,6 +408,15 @@ class AutomatedTestService {
       steps.push({ type: 'click', locator, description: `Click on ${locator}` });
     }
 
+    // 2) Extract complex click patterns with try-catch blocks
+    const complexClickRegex = /\/\/ Smart clicking with multiple strategies for: ([^\n]+)[\s\S]*?await driver\.\$\(['"`]([^'"`]+)['"`]\)\.click\(\)/g;
+    let complexClickMatch;
+    while ((complexClickMatch = complexClickRegex.exec(script)) !== null) {
+      const target = complexClickMatch[1];
+      const locator = complexClickMatch[2];
+      steps.push({ type: 'click', locator, description: `Click on ${target}` });
+    }
+
     const setValueRegex = /(?:await\s+)?driver\.\$\((['"`])([^'"`]+)\1\)\.setValue\((['"`])([^'"`]+)\3\)/g;
     let setValueMatch;
     while ((setValueMatch = setValueRegex.exec(script)) !== null) {
@@ -424,6 +484,8 @@ class AutomatedTestService {
     const maxRetries = 2; // keep retries minimal to honor global timeout
 
     // Do not auto-dismiss popups before steps to avoid unintended navigation
+    
+    console.log(`🔍 Executing step: type="${step.type}", locator="${step.locator}", description="${step.description}"`);
 
     switch (step.type) {
       case 'click': {
@@ -437,10 +499,57 @@ class AutomatedTestService {
           } catch (err) {
             if (attempt === maxRetries) throw err;
             await this.dismissSystemPopups(driver);
+            // Auto-scroll to try revealing the element between attempts
+            try { await this.performScroll(driver, 'down'); } catch {}
             await driver.pause(800 * attempt);
           }
         }
         return;
+      }
+      case 'scroll': {
+        try {
+          console.log(`📜 Executing scroll action: ${step.description}`);
+          // Robust, code-independent scrolling
+          const direction = /up/i.test(step.description || '') ? 'up' : /left/i.test(step.description || '') ? 'left' : /right/i.test(step.description || '') ? 'right' : 'down';
+          try {
+            const size = await driver.getWindowSize();
+            const left = Math.floor(size.width * 0.1);
+            const top = Math.floor(size.height * 0.1);
+            const width = Math.floor(size.width * 0.8);
+            const height = Math.floor(size.height * 0.8);
+            await driver.execute('mobile: scrollGesture', {
+              left, top, width, height,
+              direction,
+              percent: 0.8
+            });
+          } catch (e) {
+            // Fallback to W3C actions
+            const size = await driver.getWindowSize();
+            const startY = direction === 'down' ? Math.floor(size.height * 0.8) : direction === 'up' ? Math.floor(size.height * 0.2) : Math.floor(size.height * 0.5);
+            const endY = direction === 'down' ? Math.floor(size.height * 0.2) : direction === 'up' ? Math.floor(size.height * 0.8) : Math.floor(size.height * 0.5);
+            const startX = direction === 'left' ? Math.floor(size.width * 0.8) : direction === 'right' ? Math.floor(size.width * 0.2) : Math.floor(size.width * 0.5);
+            const endX = direction === 'left' ? Math.floor(size.width * 0.2) : direction === 'right' ? Math.floor(size.width * 0.8) : Math.floor(size.width * 0.5);
+            await driver.performActions([
+              {
+                type: 'pointer',
+                id: 'finger1',
+                parameters: { pointerType: 'touch' },
+                actions: [
+                  { type: 'pointerMove', duration: 0, x: startX, y: startY },
+                  { type: 'pointerDown', button: 0 },
+                  { type: 'pause', duration: 300 },
+                  { type: 'pointerMove', duration: 500, x: endX, y: endY },
+                  { type: 'pointerUp', button: 0 }
+                ]
+              }
+            ]);
+          }
+          await driver.pause(1000);
+          return;
+        } catch (err) {
+          console.log(`⚠️ Scroll failed: ${err.message}`);
+          throw err;
+        }
       }
       case 'setValue': {
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
@@ -640,8 +749,48 @@ class AutomatedTestService {
           throw new Error(`Verification failed: "${target}" not found in input field or as displayed text`);
         }
       }
+      case 'back': {
+        try {
+          console.log(`⬅️ Executing back action: ${step.description}`);
+          if (step.code) {
+            await eval(step.code);
+          } else {
+            await driver.back();
+          }
+          await driver.pause(1000);
+          return;
+        } catch (err) {
+          console.log(`⚠️ Back action failed: ${err.message}`);
+          throw err;
+        }
+      }
+      case 'wait': {
+        try {
+          console.log(`⏳ Executing wait action: ${step.description}`);
+          if (step.code) {
+            await eval(step.code);
+          } else {
+            await driver.pause(2000);
+          }
+          return;
+        } catch (err) {
+          console.log(`⚠️ Wait action failed: ${err.message}`);
+          throw err;
+        }
+      }
       default: {
-        return;
+        console.log(`⚠️ Unknown step type: ${step.type}, treating as click`);
+        // Fallback to click for unknown types
+        try {
+          const target = this.normalizeTarget(step.locator);
+          const el = await this.findElementSmart(driver, target, timeoutMs);
+          console.log(`➡️ Click (fallback): ${target}`);
+          await el.click();
+          return;
+        } catch (err) {
+          console.log(`⚠️ Fallback click failed: ${err.message}`);
+          throw err;
+        }
       }
     }
   }
@@ -652,6 +801,7 @@ class AutomatedTestService {
 
     // Normalize to plain text target if came with '~'
     const plain = locator.startsWith('~') ? locator.slice(1) : locator;
+    console.log(`🔍 Finding element: "${plain}"`);
 
     if (locator.startsWith('~')) {
       candidates.push(() => driver.$(`~${plain}`));
@@ -676,7 +826,7 @@ class AutomatedTestService {
       candidates.push(() => driver.$(`android=new UiSelector().description("${plain}")`));
       candidates.push(() => driver.$(`android=new UiSelector().descriptionContains("${plain}")`));
       
-      // Try partial matches for common variations
+      // Enhanced partial matching for your specific test case
       const words = plain.split(/\s+/);
       if (words.length > 1) {
         // Try with first few words
@@ -693,6 +843,28 @@ class AutomatedTestService {
             candidates.push(() => driver.$(`android=new UiSelector().textContains("${word}")`));
           }
         });
+
+        // Special handling for common UI patterns
+        if (words.includes('next') || words.includes('continue')) {
+          candidates.push(() => driver.$(`android=new UiSelector().textContains("Next")`));
+          candidates.push(() => driver.$(`android=new UiSelector().textContains("Continue")`));
+          candidates.push(() => driver.$(`android=new UiSelector().textContains("Proceed")`));
+        }
+        
+        if (words.includes('lexical') || words.includes('semantics')) {
+          candidates.push(() => driver.$(`android=new UiSelector().textContains("Lexical")`));
+          candidates.push(() => driver.$(`android=new UiSelector().textContains("Semantics")`));
+        }
+        
+        if (words.includes('exercise') || words.includes('visual')) {
+          candidates.push(() => driver.$(`android=new UiSelector().textContains("Exercise")`));
+          candidates.push(() => driver.$(`android=new UiSelector().textContains("Visual")`));
+        }
+        
+        if (words.includes('picture') || words.includes('matching')) {
+          candidates.push(() => driver.$(`android=new UiSelector().textContains("Picture")`));
+          candidates.push(() => driver.$(`android=new UiSelector().textContains("Matching")`));
+        }
       }
 
       // Scroll into view by text if not immediately present
@@ -703,22 +875,66 @@ class AutomatedTestService {
     // Enforce overall deadline across strategies to avoid multi-minute waits
     const deadline = Date.now() + timeoutMs;
     let lastError;
-    for (const getEl of candidates) {
+    for (let idx = 0; idx < candidates.length; idx++) {
+      const getEl = candidates[idx];
       const remaining = deadline - Date.now();
       if (remaining <= 0) break;
-      // Per-strategy cap: at most 8s or remaining time
+      // Per-strategy cap: at most 2s or remaining time
       const perStrategyTimeout = Math.min(2000, Math.max(500, remaining));
       try {
         const el = await getEl();
         await el.waitForExist({ timeout: perStrategyTimeout });
         await el.waitForDisplayed({ timeout: perStrategyTimeout }).catch(() => {});
+        console.log(`✅ Found element with strategy`);
         return el;
       } catch (err) {
         lastError = err;
-        console.log(`⚠️ Strategy failed: ${err.message}`);
+        console.log(`⚠️ Strategy failed: element ("${err.message}") still not existing after ${perStrategyTimeout}ms`);
+        // Every few strategies, attempt a scroll to reveal content
+        if ((idx + 1) % 4 === 0) {
+          try {
+            await this.performScroll(driver, 'down');
+          } catch {}
+        }
       }
     }
     throw new Error(`Locator not found within ${timeoutMs}ms: ${plain}`);
+  }
+
+  async performScroll(driver, direction = 'down') {
+    try {
+      const size = await driver.getWindowSize();
+      const left = Math.floor(size.width * 0.1);
+      const top = Math.floor(size.height * 0.1);
+      const width = Math.floor(size.width * 0.8);
+      const height = Math.floor(size.height * 0.8);
+      await driver.execute('mobile: scrollGesture', {
+        left, top, width, height,
+        direction,
+        percent: 0.8
+      });
+    } catch (e) {
+      // Fallback to W3C pointer actions
+      const size = await driver.getWindowSize();
+      const startY = direction === 'down' ? Math.floor(size.height * 0.8) : direction === 'up' ? Math.floor(size.height * 0.2) : Math.floor(size.height * 0.5);
+      const endY = direction === 'down' ? Math.floor(size.height * 0.2) : direction === 'up' ? Math.floor(size.height * 0.8) : Math.floor(size.height * 0.5);
+      const startX = direction === 'left' ? Math.floor(size.width * 0.8) : direction === 'right' ? Math.floor(size.width * 0.2) : Math.floor(size.width * 0.5);
+      const endX = direction === 'left' ? Math.floor(size.width * 0.2) : direction === 'right' ? Math.floor(size.width * 0.8) : Math.floor(size.width * 0.5);
+      await driver.performActions([
+        {
+          type: 'pointer',
+          id: 'finger1',
+          parameters: { pointerType: 'touch' },
+          actions: [
+            { type: 'pointerMove', duration: 0, x: startX, y: startY },
+            { type: 'pointerDown', button: 0 },
+            { type: 'pause', duration: 300 },
+            { type: 'pointerMove', duration: 500, x: endX, y: endY },
+            { type: 'pointerUp', button: 0 }
+          ]
+        }
+      ]);
+    }
   }
 
   normalizeTarget(locator) {

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { 
   Upload, 
@@ -24,21 +24,93 @@ const TestExecution = () => {
   const [uploadedFile, setUploadedFile] = useState(null);
   const [isExecuting, setIsExecuting] = useState(false);
   const [executionStatus, setExecutionStatus] = useState(null);
-  const [testTemplates, setTestTemplates] = useState([]);
-  const [selectedTemplate, setSelectedTemplate] = useState('');
-
-  useEffect(() => {
-    fetchTestTemplates();
-  }, []);
-
-  const fetchTestTemplates = async () => {
-    try {
-      const response = await axios.get('/api/tests/templates');
-      setTestTemplates(response.data.templates || []);
-    } catch (error) {
-      console.error('Failed to fetch test templates:', error);
+  const [testTemplates] = useState([
+    {
+      id: 'login-test',
+      name: 'Login Test',
+      template: 'Login with valid credentials and verify dashboard loads',
+      description: 'Test user login functionality with valid credentials',
+      platform: 'android'
+    },
+    {
+      id: 'web-login-test',
+      name: 'Web Login Test',
+      template: 'Login with valid credentials and verify dashboard loads',
+      description: 'Test web application login functionality',
+      platform: 'web'
+    },
+    {
+      id: 'navigation-test',
+      name: 'Navigation Test',
+      template: 'Navigate through the main menu and verify all pages load correctly',
+      description: 'Test app navigation and menu functionality',
+      platform: 'android'
+    },
+    {
+      id: 'form-test',
+      name: 'Form Test',
+      template: 'Fill out the registration form and verify successful submission',
+      description: 'Test form submission and validation',
+      platform: 'web'
+    },
+    {
+      id: 'ios-login-test',
+      name: 'iOS Login Test',
+      template: 'Login with valid credentials and verify dashboard loads',
+      description: 'Test iOS app login functionality',
+      platform: 'ios'
+    },
+    {
+      id: 'search-test',
+      name: 'Search Test',
+      template: 'Search for a product and verify search results are displayed',
+      description: 'Test search functionality',
+      platform: 'web'
+    },
+    {
+      id: 'alphanso-app-template',
+      name: 'Alphanso App Template',
+      template: 'Click on Next Button\nClick on Language Formation\nVerify Lang-Form Exercise 1:Sentence Formation displayed\nClick on Lang-Form Exercise 1:Sentence Formation\nVerify Nouns and Verb visible\nClick on Nouns on Verbs',
+      description: 'Test Alphanso app language formation exercise with sentence formation and noun/verb interaction',
+      platform: 'android'
+    },
+    {
+      id: 'api-demos-template',
+      name: 'API Demos Template',
+      template: 'Click on Views\nClick on TextFields\nEnter Text - "Aniket Appium"\nVerify "Aniket Appium" is displayed\nClick on Back button',
+      description: 'Test API Demos app text field functionality with text entry and verification',
+      platform: 'android'
+    },
+    {
+      id: 'lexical-semantics-template',
+      name: 'Lexical Semantics Template',
+      template: 'Open the App\nScroll in the Intro page\nClick on Next Button\nClick on Lexical Semantics\nClick on Lex Sem Exercise 1: Visual Identification\nClick on Picture Noun Matching\nClick on the word "spoon" (Correct answer)\nClick on Next button on this page',
+      description: 'Test Lexical Semantics app with visual identification and picture noun matching exercises',
+      platform: 'android'
+    },
+    {
+      id: 'form-validation-template',
+      name: 'Form Validation Template',
+      template: 'Click on Registration\nEnter username "testuser123"\nEnter email "test@example.com"\nEnter password "TestPass123"\nClick on Submit button\nVerify "Registration successful" message is displayed',
+      description: 'Test form validation with user registration including field validation and success verification',
+      platform: 'android'
+    },
+    {
+      id: 'navigation-menu-template',
+      name: 'Navigation Menu Template',
+      template: 'Click on Menu button\nVerify all menu items are visible\nClick on Settings\nVerify Settings page loads\nClick on Back button\nClick on Profile\nVerify Profile page loads\nClick on Back button',
+      description: 'Test app navigation through menu system with page verification and back navigation',
+      platform: 'android'
+    },
+    {
+      id: 'search-functionality-template',
+      name: 'Search Functionality Template',
+      template: 'Click on Search icon\nEnter search term "mobile app"\nClick on Search button\nVerify search results are displayed\nClick on first result\nVerify result details page loads\nClick on Back button',
+      description: 'Test search functionality with search term entry, results display, and navigation to details',
+      platform: 'android'
     }
-  };
+  ]);
+  const [selectedTemplate, setSelectedTemplate] = useState('');
 
   const onDrop = async (acceptedFiles) => {
     const file = acceptedFiles[0];

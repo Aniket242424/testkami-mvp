@@ -198,8 +198,8 @@ class AppiumService {
         
         console.log('⏳ Emulator still booting...');
         await new Promise(resolve => setTimeout(resolve, timeouts.checkInterval));
-        
-      } catch (error) {
+
+    } catch (error) {
         console.log('⏳ Waiting for emulator to be ready...');
         await new Promise(resolve => setTimeout(resolve, timeouts.checkInterval));
       }
@@ -251,7 +251,7 @@ class AppiumService {
       console.log('📱 Current package:', currentPackage);
       
       return this.driver;
-      
+
     } catch (error) {
       console.error('❌ Failed to initialize Appium driver:', error);
       throw new Error(`Appium driver initialization failed: ${error.message}`);
@@ -262,11 +262,11 @@ class AppiumService {
     try {
       console.log('🧪 Executing test script...');
       
-      const steps = [];
-      const screenshots = [];
+    const steps = [];
+    const screenshots = [];
       let passedSteps = 0;
       let failedSteps = 0;
-      
+
       // Parse the test script
       const scriptSteps = this.parseTestScript(testScript);
       
@@ -329,12 +329,12 @@ class AppiumService {
         failedSteps,
         screenshots: screenshots.length
       };
-      
-      return {
-        steps,
-        screenshots,
+
+    return {
+      steps,
+      screenshots,
         summary
-      };
+    };
       
     } catch (error) {
       console.error('❌ Test script execution failed:', error);
