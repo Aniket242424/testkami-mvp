@@ -85,8 +85,10 @@ router.post('/generate-script', async (req, res) => {
 router.post('/execute', async (req, res) => {
   try {
     console.log('🚀 EXECUTE API CALLED - Request Body:', JSON.stringify(req.body, null, 2));
+    console.log('🔍 testCaseName received:', req.body.testCaseName);
     
     const {
+      testCaseName,
       naturalLanguageTest,
       platform,
       appId,
@@ -160,6 +162,7 @@ router.post('/execute', async (req, res) => {
     // Execute full automated test
     console.log('🎯 Calling automatedTestService.executeFullTest()...');
     const result = await automatedTestService.executeFullTest({
+      testCaseName,
       naturalLanguageTest,
       platform,
       appPath,
@@ -179,14 +182,22 @@ router.post('/execute', async (req, res) => {
         htmlReportUrl: `/reports/${result.report.id}.html`
       });
     } else {
-      // Return user-friendly error
+      // Even for failures, generate a report and return it
       const userFriendlyError = automatedTestService.getUserFriendlyError(result.error);
       
-      res.status(500).json({
+      res.status(200).json({
         success: false,
-        error: userFriendlyError,
         executionId: result.executionId,
-        report: result.report
+        message: 'Test execution completed with failures',
+        error: userFriendlyError,
+        report: result.report,
+        htmlReportUrl: result.report ? `/reports/${result.report.id}.html` : null,
+        failureDetails: {
+          failedStep: result.failedStep || 'Unknown step',
+          failureReason: result.failureReason || userFriendlyError,
+          screenshots: result.screenshots || [],
+          stepDetails: result.stepDetails || []
+        }
       });
     }
 
@@ -283,92 +294,29 @@ router.get('/history', async (req, res) => {
 // Get test templates
 router.get('/templates', (req, res) => {
   try {
-    const templates = [
-      {
-        id: 'login-test',
-        name: 'Login Test',
-        template: 'Login with valid credentials and verify dashboard loads',
-        description: 'Test user login functionality with valid credentials',
-        platform: 'android'
-      },
-      {
-        id: 'web-login-test',
-        name: 'Web Login Test',
-        template: 'Login with valid credentials and verify dashboard loads',
-        description: 'Test web application login functionality',
-        platform: 'web'
-      },
-      {
-        id: 'navigation-test',
-        name: 'Navigation Test',
-        template: 'Navigate through the main menu and verify all pages load correctly',
-        description: 'Test app navigation and menu functionality',
-        platform: 'android'
-      },
-      {
-        id: 'form-test',
-        name: 'Form Test',
-        template: 'Fill out the registration form and verify successful submission',
-        description: 'Test form submission and validation',
-        platform: 'web'
-      },
-      {
-        id: 'ios-login-test',
-        name: 'iOS Login Test',
-        template: 'Login with valid credentials and verify dashboard loads',
-        description: 'Test iOS app login functionality',
-        platform: 'ios'
-      },
-      {
-        id: 'search-test',
-        name: 'Search Test',
-        template: 'Search for a product and verify search results are displayed',
-        description: 'Test search functionality',
-        platform: 'web'
-      },
-      {
-        id: 'alphanso-app-template',
-        name: 'Alphanso App Template',
-        template: 'Click on Next Button\nClick on Language Formation\nVerify Lang-Form Exercise 1:Sentence Formation displayed\nClick on Lang-Form Exercise 1:Sentence Formation\nVerify Nouns and Verb visible\nClick on Nouns on Verbs',
-        description: 'Test Alphanso app language formation exercise with sentence formation and noun/verb interaction',
-        platform: 'android'
-      },
-      {
-        id: 'api-demos-template',
-        name: 'API Demos Template',
-        template: 'Click on Views\nClick on TextFields\nEnter Text - "Aniket Appium"\nVerify "Aniket Appium" is displayed\nClick on Back button',
-        description: 'Test API Demos app text field functionality with text entry and verification',
-        platform: 'android'
-      },
-      {
-        id: 'lexical-semantics-template',
-        name: 'Lexical Semantics Template',
-        template: 'Open the App\nScroll in the Intro page\nClick on Next Button\nClick on Lexical Semantics\nClick on Lex Sem Exercise 1: Visual Identification\nClick on Picture Noun Matching\nClick on the word "spoon" (Correct answer)\nClick on Next button on this page',
-        description: 'Test Lexical Semantics app with visual identification and picture noun matching exercises',
-        platform: 'android'
-      },
-      {
-        id: 'form-validation-template',
-        name: 'Form Validation Template',
-        template: 'Click on Registration\nEnter username "testuser123"\nEnter email "test@example.com"\nEnter password "TestPass123"\nClick on Submit button\nVerify "Registration successful" message is displayed',
-        description: 'Test form validation with user registration including field validation and success verification',
-        platform: 'android'
-      },
-      {
-        id: 'navigation-menu-template',
-        name: 'Navigation Menu Template',
-        template: 'Click on Menu button\nVerify all menu items are visible\nClick on Settings\nVerify Settings page loads\nClick on Back button\nClick on Profile\nVerify Profile page loads\nClick on Back button',
-        description: 'Test app navigation through menu system with page verification and back navigation',
-        platform: 'android'
-      },
-      {
-        id: 'search-functionality-template',
-        name: 'Search Functionality Template',
-        template: 'Click on Search icon\nEnter search term "mobile app"\nClick on Search button\nVerify search results are displayed\nClick on first result\nVerify result details page loads\nClick on Back button',
-        description: 'Test search functionality with search term entry, results display, and navigation to details',
-        platform: 'android'
-      }
-    ];
+        const templates = [
+          {
+            id: 'alphanso-app-template',
+            name: 'Alphanso App Template',
+            template: 'Click on Next Button\nClick on Language Formation\nVerify Lang-Form Exercise 1:Sentence Formation displayed\nClick on Lang-Form Exercise 1:Sentence Formation\nVerify Nouns and Verb visible\nClick on Nouns on Verbs',
+            description: 'Test Alphanso app language formation exercise with sentence formation and noun/verb interaction',
+            platform: 'android'
+          },
+          {
+            id: 'lexical-semantics-template',
+            name: 'Lexical Semantics Template',
+            template: 'Open the App\nScroll in the Intro page\nClick on Next Button\nClick on Lexical Semantics\nClick on Lex Sem Exercise 1: Visual Identification\nClick on Picture Word Matching\nClick on the word "चम्मच" (Correct answer)\nClick on Next button on this page',
+            description: 'Test Lexical Semantics app with visual identification and picture word matching exercises using Hindi text',
+            platform: 'android'
+          },
+          {
+            id: 'api-demos-template',
+            name: 'API Demos Template',
+            template: 'Click on Views\nClick on TextFields\nEnter Text - "Aniket Appium"\nVerify "Aniket Appium" is displayed\nClick on Back button',
+            description: 'Test API Demos app text field functionality with text entry and verification',
+            platform: 'android'
+          }
+        ];
 
     res.status(200).json({
       success: true,

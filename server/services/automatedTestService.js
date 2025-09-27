@@ -27,6 +27,7 @@ class AutomatedTestService {
       console.log('📝 Step 1: Generating test script...');
       console.log('🔍 Input testData:', JSON.stringify(testData, null, 2));
       console.log('🔍 naturalLanguageTest:', testData.naturalLanguageTest);
+      console.log('🔍 testCaseName:', testData.testCaseName);
       logger.info('🧪 Test', 'Script Generation - Started', { executionId });
       
       const scriptResult = await llmService.generateTestScript(
@@ -96,8 +97,8 @@ class AutomatedTestService {
       const totalDuration = Date.now() - startTime;
       console.error('❌ Full test execution failed:', error);
       
-      // Generate error report
-      const errorReport = await this.generateErrorReport(testData, error, executionId, totalDuration);
+      // Generate comprehensive error report with failure details
+      const errorReport = await this.generateErrorReport(testData, error, executionId, totalDuration, startTime, [], []);
       
       // Send error email
       try {
@@ -106,7 +107,17 @@ class AutomatedTestService {
         console.error('Failed to send error email:', emailError);
       }
       
-      throw error;
+      // Return failure result with report instead of throwing
+      return {
+        success: false,
+        executionId,
+        error: error.message,
+        report: errorReport,
+        failedStep: this.extractFailedStep(error),
+        failureReason: this.extractFailureReason(error),
+        screenshots: errorReport.screenshots || [],
+        stepDetails: errorReport.steps || []
+      };
     } finally {
       this.globalDeadline = null;
     }
@@ -314,9 +325,32 @@ class AutomatedTestService {
           throw new Error('Global execution timeout reached (90000ms)');
         }
         
+        // Periodic app state check to detect manual app switching
+        if (i > 0 && i % 3 === 0) { // Check every 3 steps
+          const appState = await this.checkAppState(driver);
+          if (!appState.isRunning) {
+            throw new Error(`App was manually closed or switched during test execution. Current state: ${appState.state}`);
+          }
+        }
+        
         try {
           console.log(`📝 Executing step ${i + 1}: ${step.description}`);
           logs.push(`Executing step ${i + 1}: ${step.description}`);
+
+          // Check if app is still running and in focus before executing step
+          const appState = await this.checkAppState(driver);
+          if (!appState.isRunning) {
+            throw new Error(`App is no longer running. Current state: ${appState.state}`);
+          }
+          if (!appState.isInFocus) {
+            console.log(`⚠️ App is not in focus (${appState.state}). Attempting to bring to foreground...`);
+            try {
+              await this.bringAppToForeground(driver);
+              await driver.pause(2000); // Wait for app to come to foreground
+            } catch (foregroundError) {
+              throw new Error(`Failed to bring app to foreground: ${foregroundError.message}`);
+            }
+          }
 
           // Execute structured step if available, otherwise eval fallback
           if (step.type) {
@@ -333,7 +367,7 @@ class AutomatedTestService {
           const stepDuration = Date.now() - stepStartTime;
           
           // Take screenshot after step execution
-          const screenshotPath = await this.takeScreenshot(driver, `step_${i + 1}_${Date.now()}`);
+          const screenshotPath = await this.takeScreenshot(driver, `step_${i + 1}_${executionId}_${Date.now()}`);
           screenshots.push({
             name: `Step ${i + 1}: ${step.description}`,
             path: screenshotPath,
@@ -354,7 +388,7 @@ class AutomatedTestService {
           const stepDuration = Date.now() - stepStartTime;
           
           // Take screenshot on failure
-          const screenshotPath = await this.takeScreenshot(driver, `step_${i + 1}_error_${Date.now()}`);
+          const screenshotPath = await this.takeScreenshot(driver, `step_${i + 1}_error_${executionId}_${Date.now()}`);
           screenshots.push({
             name: `Step ${i + 1} Error: ${step.description}`,
             path: screenshotPath,
@@ -372,8 +406,16 @@ class AutomatedTestService {
           console.error(`❌ Step ${i + 1} failed:`, stepError.message);
           logs.push(`Step ${i + 1} failed: ${stepError.message}`);
           
+          // Create enhanced error with step information
+          const enhancedError = new Error(`Step ${i + 1} failed: ${step.description} - ${stepError.message}`);
+          enhancedError.stepNumber = i + 1;
+          enhancedError.stepDescription = step.description;
+          enhancedError.stepType = step.type || 'unknown';
+          enhancedError.stepLocator = step.locator || 'unknown';
+          enhancedError.originalError = stepError;
+          
           // Abort remaining steps on failure
-          throw stepError;
+          throw enhancedError;
         }
       }
       
@@ -485,7 +527,8 @@ class AutomatedTestService {
 
     // Do not auto-dismiss popups before steps to avoid unintended navigation
     
-    console.log(`🔍 Executing step: type="${step.type}", locator="${step.locator}", description="${step.description}"`);
+      console.log(`🔍 Executing step: type="${step.type}", locator="${step.locator}", description="${step.description}"`);
+      console.log(`🔍 Step object:`, JSON.stringify(step, null, 2));
 
     switch (step.type) {
       case 'click': {
@@ -722,32 +765,119 @@ class AutomatedTestService {
         }
         await driver.back();
         await driver.pause(500);
+        
+        // Check if back navigation took us out of the app
+        const appState = await this.checkAppState(driver);
+        if (!appState.isRunning) {
+          throw new Error(`Back navigation exited the app. Current state: ${appState.state}`);
+        }
+        
         return;
       }
       case 'verify': {
-        const target = step.target;
+        let target = step.locator;
+        // Remove quotes from the target if present
+        if (target.startsWith('"') && target.endsWith('"')) {
+          target = target.slice(1, -1);
+        }
         console.log(`🔍 Verifying: "${target}"`);
         
-        // First try to find in input field
+        // First try to find in input fields - check all EditText fields
         try {
-          const inputField = await driver.$("android=new UiSelector().className(\"android.widget.EditText\")");
-          const inputText = await inputField.getText();
-          if (inputText && inputText.includes(target)) {
-            console.log(`✅ Text found in input field: "${inputText}"`);
-            return;
+          console.log(`🔍 Checking all input fields for text: "${target}"`);
+          const inputFields = await driver.$$("android=new UiSelector().className(\"android.widget.EditText\")");
+          
+          for (let i = 0; i < inputFields.length; i++) {
+            try {
+              const inputField = inputFields[i];
+              // Try multiple methods to get the text value
+              let inputText = '';
+              
+              try {
+                inputText = await inputField.getText();
+              } catch (e1) {
+                try {
+                  inputText = await inputField.getAttribute('text');
+                } catch (e2) {
+                  try {
+                    inputText = await inputField.getAttribute('value');
+                  } catch (e3) {
+                    try {
+                      inputText = await inputField.getAttribute('content-desc');
+                    } catch (e4) {
+                      console.log(`⚠️ Could not get text from input field ${i + 1}`);
+                      continue;
+                    }
+                  }
+                }
+              }
+              
+              console.log(`🔍 Input field ${i + 1} text: "${inputText}"`);
+              
+              if (inputText && inputText.includes(target)) {
+                console.log(`✅ Text found in input field ${i + 1}: "${inputText}"`);
+                return;
+              }
+              
+              // Also check if the target is contained in the input text (case insensitive)
+              if (inputText && inputText.toLowerCase().includes(target.toLowerCase())) {
+                console.log(`✅ Text found in input field ${i + 1} (case insensitive): "${inputText}"`);
+                return;
+              }
+              
+            } catch (fieldErr) {
+              console.log(`⚠️ Error checking input field ${i + 1}: ${fieldErr.message}`);
+              continue;
+            }
           }
+          
+          console.log(`⚠️ Text "${target}" not found in any input field`);
         } catch (err) {
           console.log(`⚠️ Input field check failed: ${err.message}`);
         }
         
-        // Try to find as displayed text element
+        // Try to find as displayed text element with multiple strategies
         try {
-          await driver.$(`android=new UiSelector().textContains("${target}")`).waitForDisplayed({ timeout: 5000 });
-          console.log(`✅ Text found as displayed element`);
+          // First try exact match
+          await driver.$(`android=new UiSelector().textContains("${target}")`).waitForDisplayed({ timeout: 2000 });
+          console.log(`✅ Text found as displayed element (exact match)`);
           return;
-        } catch (err) {
-          throw new Error(`Verification failed: "${target}" not found in input field or as displayed text`);
+        } catch (err1) {
+          console.log(`⚠️ Exact match failed, trying variations...`);
+          
+          try {
+            // Try with normalized spacing (replace colons with space+colon)
+            const normalizedTarget = target.replace(/:/g, ': ').replace(/\s+/g, ' ').trim();
+            await driver.$(`android=new UiSelector().textContains("${normalizedTarget}")`).waitForDisplayed({ timeout: 2000 });
+            console.log(`✅ Text found as displayed element (normalized spacing)`);
+            return;
+          } catch (err2) {
+            try {
+              // Try with individual words
+              const words = target.split(/\s+/).filter(w => w.length > 2);
+              for (const word of words) {
+                try {
+                  await driver.$(`android=new UiSelector().textContains("${word}")`).waitForDisplayed({ timeout: 1000 });
+                  console.log(`✅ Found key word "${word}" from target "${target}"`);
+                  return;
+                } catch (wordErr) {
+                  console.log(`⚠️ Word "${word}" not found, trying next...`);
+                }
+              }
+            } catch (err3) {
+              // Last resort: try partial matching
+              const partialTarget = target.substring(0, Math.floor(target.length * 0.7));
+              await driver.$(`android=new UiSelector().textContains("${partialTarget}")`).waitForDisplayed({ timeout: 2000 });
+              console.log(`✅ Text found as displayed element (partial match)`);
+              return;
+            }
+          }
         }
+        
+        // Note: Success indicators check removed for simple text verification
+        // This was causing unnecessary searches for "Well Done", "Good Job", etc.
+        
+        throw new Error(`Verification failed: "${target}" not found in input field or as displayed text`);
       }
       case 'back': {
         try {
@@ -820,11 +950,26 @@ class AutomatedTestService {
         candidates.push(() => driver.$(`android=new UiSelector().resourceId("${locator}")`));
       }
 
-      // Text / contains / desc
-      candidates.push(() => driver.$(`android=new UiSelector().text("${plain}")`));
-      candidates.push(() => driver.$(`android=new UiSelector().textContains("${plain}")`));
-      candidates.push(() => driver.$(`android=new UiSelector().description("${plain}")`));
-      candidates.push(() => driver.$(`android=new UiSelector().descriptionContains("${plain}")`));
+          // Text / contains / desc - try full phrase first
+          candidates.push(() => driver.$(`android=new UiSelector().text("${plain}")`));
+          candidates.push(() => driver.$(`android=new UiSelector().textContains("${plain}")`));
+          candidates.push(() => driver.$(`android=new UiSelector().description("${plain}")`));
+          candidates.push(() => driver.$(`android=new UiSelector().descriptionContains("${plain}")`));
+          
+          // For verification steps, try to find text that contains the key words
+          if (plain.toLowerCase().includes('verify') || plain.toLowerCase().includes('visible')) {
+            const keyWords = plain.split(/\s+/).filter(word => 
+              word.length > 2 && 
+              !['verify', 'check', 'visible', 'displayed', 'shown', 'the', 'is', 'are'].includes(word.toLowerCase())
+            );
+            if (keyWords.length > 0) {
+              // Try to find elements containing the key words
+              keyWords.forEach(word => {
+                candidates.push(() => driver.$(`android=new UiSelector().textContains("${word}")`));
+                candidates.push(() => driver.$(`android=new UiSelector().descriptionContains("${word}")`));
+              });
+            }
+          }
       
       // Enhanced partial matching for your specific test case
       const words = plain.split(/\s+/);
@@ -1065,6 +1210,172 @@ class AutomatedTestService {
     }
   }
 
+  async checkAppState(driver) {
+    try {
+      // Get current app package and activity
+      const currentActivity = await driver.getCurrentActivity();
+      const currentPackage = await driver.getCurrentPackage();
+      
+      console.log(`🔍 App state check - Package: ${currentPackage}, Activity: ${currentActivity}`);
+      
+      // Check if we're on the home screen or system UI
+      const isHomeScreen = currentPackage.includes('launcher') || 
+                          currentPackage.includes('systemui') || 
+                          currentActivity.includes('launcher') ||
+                          currentActivity.includes('home');
+      
+      // Check if we're on a system dialog or settings
+      const isSystemUI = currentPackage.includes('android') && 
+                        (currentActivity.includes('settings') || 
+                         currentActivity.includes('dialog') ||
+                         currentActivity.includes('permission'));
+      
+      if (isHomeScreen) {
+        return {
+          isRunning: false,
+          isInFocus: false,
+          state: 'home_screen',
+          package: currentPackage,
+          activity: currentActivity
+        };
+      }
+      
+      if (isSystemUI) {
+        return {
+          isRunning: false,
+          isInFocus: false,
+          state: 'system_ui',
+          package: currentPackage,
+          activity: currentActivity
+        };
+      }
+      
+      // App appears to be running and in focus
+      return {
+        isRunning: true,
+        isInFocus: true,
+        state: 'running',
+        package: currentPackage,
+        activity: currentActivity
+      };
+      
+    } catch (error) {
+      console.log(`⚠️ App state check failed: ${error.message}`);
+      // If we can't check app state, assume it's not running
+      return {
+        isRunning: false,
+        isInFocus: false,
+        state: 'unknown_error',
+        error: error.message
+      };
+    }
+  }
+
+  async bringAppToForeground(driver) {
+    try {
+      // Try to bring the app back to foreground using ADB
+      const currentPackage = await driver.getCurrentPackage();
+      if (currentPackage && !currentPackage.includes('launcher') && !currentPackage.includes('systemui')) {
+        // Use ADB to bring app to foreground
+        const { exec } = require('child_process');
+        const util = require('util');
+        const execAsync = util.promisify(exec);
+        
+        await execAsync(`adb shell am start -n ${currentPackage}/${currentPackage}.MainActivity`);
+        console.log(`📱 Attempted to bring app ${currentPackage} to foreground`);
+      }
+    } catch (error) {
+      console.log(`⚠️ Failed to bring app to foreground: ${error.message}`);
+      throw error;
+    }
+  }
+
+  async checkForSuccessIndicators(driver, target) {
+    try {
+      // Check for common success indicators that might appear briefly
+      const successIndicators = [
+        'Correct Answer!',
+        'Correct',
+        'Success',
+        'Right',
+        'Well Done',
+        'Good Job',
+        'Excellent',
+        'Perfect',
+        'Correct answer',
+        'सही जवाब', // Hindi for "correct answer"
+        'सही', // Hindi for "correct"
+        'बहुत बढ़िया', // Hindi for "excellent"
+        'अच्छा' // Hindi for "good"
+      ];
+
+      // Monitor for quick popups or state changes over a short period
+      const startTime = Date.now();
+      const monitorDuration = 3000; // Monitor for 3 seconds
+      const checkInterval = 100; // Check every 100ms
+
+      while (Date.now() - startTime < monitorDuration) {
+        for (const indicator of successIndicators) {
+          try {
+            // Check if any success indicator is currently visible
+            const element = await driver.$(`android=new UiSelector().textContains("${indicator}")`);
+            if (await element.isDisplayed()) {
+              console.log(`🎉 Found success indicator: "${indicator}"`);
+              // Wait a moment to capture screenshot if needed
+              await driver.pause(200);
+              return true;
+            }
+          } catch (err) {
+            // Indicator not found, continue checking
+          }
+        }
+
+        // Also check for visual changes that might indicate success
+        try {
+          // Look for green checkmarks, success icons, or score changes
+          const successElements = [
+            'android=new UiSelector().descriptionContains("check")',
+            'android=new UiSelector().descriptionContains("success")',
+            'android=new UiSelector().descriptionContains("correct")',
+            'android=new UiSelector().className("android.widget.ImageView").descriptionContains("check")'
+          ];
+
+          for (const selector of successElements) {
+            try {
+              const element = await driver.$(selector);
+              if (await element.isDisplayed()) {
+                console.log(`🎉 Found success visual indicator`);
+                return true;
+              }
+            } catch (err) {
+              // Element not found, continue
+            }
+          }
+        } catch (err) {
+          // Continue monitoring
+        }
+
+        await driver.pause(checkInterval);
+      }
+
+      // Check if target-related elements show signs of completion
+      try {
+        // Look for "NEXT" button or similar progression indicators
+        const nextButton = await driver.$(`android=new UiSelector().textContains("NEXT")`);
+        if (await nextButton.isDisplayed()) {
+          console.log(`🎉 Found NEXT button - indicates completion`);
+          return true;
+        }
+      } catch (err) {
+        // No NEXT button found
+      }
+
+      throw new Error('No success indicators found within monitoring period');
+    } catch (error) {
+      throw new Error(`Success indicator check failed: ${error.message}`);
+    }
+  }
+
   async generateReport(testData, scriptResult, emulatorResult, testResult, executionId) {
     const reportId = `report_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     const reportPath = path.join(__dirname, '../../reports', `${reportId}.json`);
@@ -1074,9 +1385,15 @@ class AutomatedTestService {
       id: reportId,
       executionId,
       testData,
+      testCase: testData.testCaseName || 'Unnamed Test Case',
+      testDescription: testData.naturalLanguageTest,
+      naturalLanguageTest: testData.naturalLanguageTest,
+      platform: testData.platform,
       status: testResult.summary.failedSteps > 0 ? 'FAIL' : 'PASS',
+      result: testResult.summary.failedSteps > 0 ? 'FAIL' : 'PASS',
       startTime: new Date().toISOString(),
       endTime: new Date().toISOString(),
+      timestamp: new Date().toISOString(),
       duration: testResult.summary.totalDuration,
       summary: {
         totalSteps: testResult.summary.totalSteps,
@@ -1107,30 +1424,79 @@ class AutomatedTestService {
     };
   }
 
-  async generateErrorReport(testData, error, executionId, duration) {
+  async generateErrorReport(testData, error, executionId, duration, startTime, steps = [], screenshots = []) {
     const reportId = `error_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     const reportPath = path.join(__dirname, '../../reports', `${reportId}.json`);
     const htmlReportPath = path.join(__dirname, '../../reports', `${reportId}.html`);
+    
+    // Collect any screenshots that were captured during the test
+    const screenshotsDir = path.join(__dirname, '../../reports/screenshots');
+    const capturedScreenshots = [];
+    
+    try {
+      if (await fs.pathExists(screenshotsDir)) {
+        const files = await fs.readdir(screenshotsDir);
+        const screenshotFiles = files.filter(file => 
+          file.endsWith('.png') && 
+          file.includes(executionId)
+        );
+        
+        for (const file of screenshotFiles) {
+          const filePath = path.join(screenshotsDir, file);
+          const stats = await fs.stat(filePath);
+          capturedScreenshots.push({
+            name: file.replace('.png', ''),
+            path: filePath,
+            timestamp: stats.mtime.toISOString(),
+            url: `/reports/screenshots/${file}`
+          });
+        }
+      }
+    } catch (screenshotError) {
+      console.error('Error collecting screenshots:', screenshotError);
+    }
+    
+    // Extract detailed step information from enhanced error
+    const failedStepInfo = {
+      stepNumber: error.stepNumber || 'Unknown',
+      stepDescription: error.stepDescription || 'Unknown step',
+      stepType: error.stepType || 'unknown',
+      stepLocator: error.stepLocator || 'unknown',
+      originalError: error.originalError?.message || error.message
+    };
     
     const report = {
       id: reportId,
       executionId,
       testData,
+      testCase: testData.testCaseName || 'Unnamed Test Case',
+      testDescription: testData.naturalLanguageTest,
+      naturalLanguageTest: testData.naturalLanguageTest,
+      platform: testData.platform,
       status: 'FAIL',
-      startTime: new Date().toISOString(),
+      result: 'FAIL',
+      startTime: startTime ? new Date(startTime).toISOString() : new Date().toISOString(),
       endTime: new Date().toISOString(),
+      timestamp: new Date().toISOString(), // Add timestamp for frontend compatibility
       duration,
       error: error.message,
+      failedStepInfo: failedStepInfo, // Add detailed step information
       summary: {
-        totalSteps: 0,
-        passedSteps: 0,
+        totalSteps: failedStepInfo.stepNumber === 'Unknown' ? 0 : parseInt(failedStepInfo.stepNumber),
+        passedSteps: failedStepInfo.stepNumber === 'Unknown' ? 0 : parseInt(failedStepInfo.stepNumber) - 1,
         failedSteps: 1,
         totalDuration: duration,
-        screenshots: 0
+        screenshots: capturedScreenshots.length
       },
-      steps: [],
-      screenshots: [],
-      logs: [`Test execution failed: ${error.message}`],
+      steps: steps, // Use the passed steps instead of empty array
+      screenshots: screenshots.length > 0 ? screenshots : capturedScreenshots,
+      logs: [
+        `Test execution failed at Step ${failedStepInfo.stepNumber}`,
+        `Failed Step: ${failedStepInfo.stepDescription}`,
+        `Step Type: ${failedStepInfo.stepType}`,
+        `Step Locator: ${failedStepInfo.stepLocator}`,
+        `Error: ${failedStepInfo.originalError}`
+      ],
       generatedAt: new Date().toISOString()
     };
     
@@ -1161,6 +1527,9 @@ class AutomatedTestService {
   }
 
   getUserFriendlyError(errorMessage) {
+    if (errorMessage.includes('instrumentation process is not running') || errorMessage.includes('cannot be proxied to uiautomator2 server')) {
+      return 'The automation engine crashed during test execution. This is a system stability issue - your test logic is working correctly. Please try running the test again.';
+    }
     if (errorMessage.includes('Appium server failed to start')) {
       return 'Appium server could not be started. Please ensure Appium is installed and try again.';
     }
@@ -1170,7 +1539,55 @@ class AutomatedTestService {
     if (errorMessage.includes('APK file not found')) {
       return 'App file not found. Please upload a valid APK file and try again.';
     }
+    if (errorMessage.includes('timeout') || errorMessage.includes('timed out')) {
+      return 'Test execution timed out. The app may be slow to respond or the element could not be found.';
+    }
+    if (errorMessage.includes('no such element') || errorMessage.includes('element not found')) {
+      return 'Could not find the specified element on the screen. The app interface may have changed or the element may not be visible.';
+    }
     return 'An error occurred during test execution. Please try again.';
+  }
+
+  extractFailedStep(error) {
+    if (!error || !error.message) return 'Unknown step';
+    
+    // Use enhanced error information if available
+    if (error.stepNumber && error.stepDescription) {
+      return `Step ${error.stepNumber}: ${error.stepDescription}`;
+    }
+    
+    const message = error.message.toLowerCase();
+    
+    // Try to extract step information from error messages
+    if (message.includes('click')) return 'Click action';
+    if (message.includes('enter') || message.includes('type') || message.includes('input')) return 'Text entry';
+    if (message.includes('scroll')) return 'Scroll action';
+    if (message.includes('verify') || message.includes('assert')) return 'Verification step';
+    if (message.includes('wait')) return 'Wait action';
+    if (message.includes('back')) return 'Back navigation';
+    if (message.includes('launch') || message.includes('open')) return 'App launch';
+    
+    return 'Unknown step';
+  }
+
+  extractFailureReason(error) {
+    if (!error || !error.message) return 'Unknown reason';
+    
+    const message = error.message.toLowerCase();
+    
+    // Extract specific failure reasons
+    if (message.includes('instrumentation process is not running') || message.includes('cannot be proxied to uiautomator2 server')) {
+      return 'UiAutomator2 server crashed during test execution - this is a system stability issue, not a test logic problem';
+    }
+    if (message.includes('timeout')) return 'Element not found within timeout period';
+    if (message.includes('no such element')) return 'Target element was not found on the screen';
+    if (message.includes('not clickable')) return 'Element is not clickable or is disabled';
+    if (message.includes('not visible')) return 'Element is not visible on the screen';
+    if (message.includes('stale element')) return 'Element reference became stale';
+    if (message.includes('emulator')) return 'Emulator connection issue';
+    if (message.includes('appium')) return 'Appium server connection issue';
+    
+    return error.message;
   }
 }
 

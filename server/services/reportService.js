@@ -70,7 +70,7 @@ class ReportService {
   }
 
   async generateHTMLReport(report) {
-    const { id, testCase, platform, status, result, duration, timestamp, steps, summary, screenshots, logs, error, metadata } = report;
+    const { id, testCase, testDescription, platform, status, result, duration, timestamp, steps, summary, screenshots, logs, error, metadata } = report;
 
     // Format duration
     const formatDuration = (ms) => {
@@ -85,8 +85,13 @@ class ReportService {
 
     // Fix screenshot paths to use web URLs
     const getScreenshotUrl = (screenshotPath) => {
-      const filename = screenshotPath.split('\\').pop(); // Get filename from Windows path
-      return `/reports/screenshots/${filename}`;
+      if (!screenshotPath) return '';
+      
+      // Handle both Windows and Unix paths
+      const filename = screenshotPath.split(/[\\\/]/).pop(); // Get filename from path
+      const url = `/reports/screenshots/${filename}`;
+      console.log(`🔍 Screenshot URL: ${screenshotPath} -> ${url}`);
+      return url;
     };
 
     const html = `
@@ -290,9 +295,12 @@ class ReportService {
         
         .screenshot-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+            grid-template-columns: repeat(auto-fit, 350px);
             gap: 25px;
             padding: 25px;
+            justify-content: center;
+            max-width: 1200px;
+            margin: 0 auto;
         }
         
         .screenshot-item {
@@ -374,7 +382,7 @@ class ReportService {
         
         .metadata-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
             gap: 20px;
             padding: 25px;
         }
@@ -382,12 +390,31 @@ class ReportService {
         .metadata-item {
             display: flex;
             justify-content: space-between;
+            align-items: flex-start;
             padding: 15px 0;
-            border-bottom: 1px solid #e9ecef;
+            border-bottom: 1px solid #f0f0f0;
         }
         
         .metadata-item:last-child {
             border-bottom: none;
+        }
+        
+        .metadata-item.full-width {
+            grid-column: 1 / -1;
+            flex-direction: column;
+            align-items: flex-start;
+        }
+        
+        .metadata-item.full-width .metadata-value {
+            margin-top: 5px;
+            word-break: break-all;
+            font-family: monospace;
+            font-size: 0.9em;
+            color: #666;
+            background-color: #f8f9fa;
+            padding: 8px 12px;
+            border-radius: 4px;
+            border: 1px solid #e9ecef;
         }
         
         .metadata-label {
@@ -479,7 +506,7 @@ class ReportService {
             <div class="section-header">
                 <h2>Screenshots (${screenshots.length})</h2>
             </div>
-            <div class="screenshot-grid">
+                <div class="screenshot-grid">
                 ${screenshots.map(screenshot => `
                     <div class="screenshot-item">
                         <img src="${getScreenshotUrl(screenshot.path)}" alt="${screenshot.name}" onerror="this.style.display='none'; this.nextElementSibling.innerHTML='Screenshot not available';" />
@@ -496,7 +523,7 @@ class ReportService {
                 <h2>Test Details</h2>
             </div>
             <div class="metadata-grid">
-                <div class="metadata-item">
+                <div class="metadata-item full-width">
                     <span class="metadata-label">Execution ID:</span>
                     <span class="metadata-value">${report.executionId || 'N/A'}</span>
                 </div>
@@ -596,6 +623,7 @@ class ReportService {
             <h2>Test Execution Report</h2>
             <p><strong>Test ID:</strong> ${id}</p>
             <p><strong>Test Case:</strong> ${testCase}</p>
+            <p><strong>Test Description:</strong> ${testDescription || 'N/A'}</p>
             <p><strong>Platform:</strong> ${platform}</p>
             <div class="status-badge ${result === 'PASS' ? 'status-pass' : 'status-fail'}">
                 ${result}

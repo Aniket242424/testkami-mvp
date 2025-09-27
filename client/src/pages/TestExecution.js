@@ -17,6 +17,7 @@ import toast from 'react-hot-toast';
 import axios from 'axios';
 
 const TestExecution = () => {
+  const [testCaseName, setTestCaseName] = useState('');
   const [testCase, setTestCase] = useState('');
   const [platform, setPlatform] = useState('android');
   const [appPath, setAppPath] = useState('');
@@ -24,92 +25,29 @@ const TestExecution = () => {
   const [uploadedFile, setUploadedFile] = useState(null);
   const [isExecuting, setIsExecuting] = useState(false);
   const [executionStatus, setExecutionStatus] = useState(null);
-  const [testTemplates] = useState([
-    {
-      id: 'login-test',
-      name: 'Login Test',
-      template: 'Login with valid credentials and verify dashboard loads',
-      description: 'Test user login functionality with valid credentials',
-      platform: 'android'
-    },
-    {
-      id: 'web-login-test',
-      name: 'Web Login Test',
-      template: 'Login with valid credentials and verify dashboard loads',
-      description: 'Test web application login functionality',
-      platform: 'web'
-    },
-    {
-      id: 'navigation-test',
-      name: 'Navigation Test',
-      template: 'Navigate through the main menu and verify all pages load correctly',
-      description: 'Test app navigation and menu functionality',
-      platform: 'android'
-    },
-    {
-      id: 'form-test',
-      name: 'Form Test',
-      template: 'Fill out the registration form and verify successful submission',
-      description: 'Test form submission and validation',
-      platform: 'web'
-    },
-    {
-      id: 'ios-login-test',
-      name: 'iOS Login Test',
-      template: 'Login with valid credentials and verify dashboard loads',
-      description: 'Test iOS app login functionality',
-      platform: 'ios'
-    },
-    {
-      id: 'search-test',
-      name: 'Search Test',
-      template: 'Search for a product and verify search results are displayed',
-      description: 'Test search functionality',
-      platform: 'web'
-    },
-    {
-      id: 'alphanso-app-template',
-      name: 'Alphanso App Template',
-      template: 'Click on Next Button\nClick on Language Formation\nVerify Lang-Form Exercise 1:Sentence Formation displayed\nClick on Lang-Form Exercise 1:Sentence Formation\nVerify Nouns and Verb visible\nClick on Nouns on Verbs',
-      description: 'Test Alphanso app language formation exercise with sentence formation and noun/verb interaction',
-      platform: 'android'
-    },
-    {
-      id: 'api-demos-template',
-      name: 'API Demos Template',
-      template: 'Click on Views\nClick on TextFields\nEnter Text - "Aniket Appium"\nVerify "Aniket Appium" is displayed\nClick on Back button',
-      description: 'Test API Demos app text field functionality with text entry and verification',
-      platform: 'android'
-    },
-    {
-      id: 'lexical-semantics-template',
-      name: 'Lexical Semantics Template',
-      template: 'Open the App\nScroll in the Intro page\nClick on Next Button\nClick on Lexical Semantics\nClick on Lex Sem Exercise 1: Visual Identification\nClick on Picture Noun Matching\nClick on the word "spoon" (Correct answer)\nClick on Next button on this page',
-      description: 'Test Lexical Semantics app with visual identification and picture noun matching exercises',
-      platform: 'android'
-    },
-    {
-      id: 'form-validation-template',
-      name: 'Form Validation Template',
-      template: 'Click on Registration\nEnter username "testuser123"\nEnter email "test@example.com"\nEnter password "TestPass123"\nClick on Submit button\nVerify "Registration successful" message is displayed',
-      description: 'Test form validation with user registration including field validation and success verification',
-      platform: 'android'
-    },
-    {
-      id: 'navigation-menu-template',
-      name: 'Navigation Menu Template',
-      template: 'Click on Menu button\nVerify all menu items are visible\nClick on Settings\nVerify Settings page loads\nClick on Back button\nClick on Profile\nVerify Profile page loads\nClick on Back button',
-      description: 'Test app navigation through menu system with page verification and back navigation',
-      platform: 'android'
-    },
-    {
-      id: 'search-functionality-template',
-      name: 'Search Functionality Template',
-      template: 'Click on Search icon\nEnter search term "mobile app"\nClick on Search button\nVerify search results are displayed\nClick on first result\nVerify result details page loads\nClick on Back button',
-      description: 'Test search functionality with search term entry, results display, and navigation to details',
-      platform: 'android'
-    }
-  ]);
+      const [testTemplates] = useState([
+        {
+          id: 'alphanso-app-template',
+          name: 'Alphanso App Template',
+          template: 'Click on Next Button\nClick on Language Formation\nVerify Lang-Form Exercise 1:Sentence Formation displayed\nClick on Lang-Form Exercise 1:Sentence Formation\nVerify Nouns and Verb visible\nClick on Nouns on Verbs',
+          description: 'Test Alphanso app language formation exercise with sentence formation and noun/verb interaction',
+          platform: 'android'
+        },
+        {
+          id: 'lexical-semantics-template',
+          name: 'Lexical Semantics Template',
+          template: 'Open the App\nScroll in the Intro page\nClick on Next Button\nClick on Lexical Semantics\nClick on Lex Sem Exercise 1: Visual Identification\nClick on Picture Word Matching\nClick on the word "चम्मच" (Correct answer)\nClick on Next button on this page',
+          description: 'Test Lexical Semantics app with visual identification and picture word matching exercises using Hindi text',
+          platform: 'android'
+        },
+        {
+          id: 'api-demos-template',
+          name: 'API Demos Template',
+          template: 'Click on Views\nClick on TextFields\nEnter Text - "Aniket Appium"\nVerify "Aniket Appium" is displayed\nClick on Back button',
+          description: 'Test API Demos app text field functionality with text entry and verification',
+          platform: 'android'
+        }
+      ]);
   const [selectedTemplate, setSelectedTemplate] = useState('');
 
   const onDrop = async (acceptedFiles) => {
@@ -148,14 +86,22 @@ const TestExecution = () => {
   });
 
   const handleTemplateSelect = (template) => {
+    console.log('🔍 Template selected:', template);
     setSelectedTemplate(template.id);
     setTestCase(template.template);
+    setTestCaseName(template.name);
     setPlatform(template.platform);
+    console.log('🔍 Template name set to:', template.name);
   };
 
   const validateForm = () => {
+    if (!testCaseName.trim()) {
+      toast.error('Please enter a test case name');
+      return false;
+    }
+
     if (!testCase.trim()) {
-      toast.error('Please enter a test case');
+      toast.error('Please enter a test case description');
       return false;
     }
 
@@ -188,58 +134,117 @@ const TestExecution = () => {
       });
 
       const testData = {
+        testCaseName: testCaseName.trim() || 'Unnamed Test Case',
         naturalLanguageTest: testCase.trim(),
         platform: platform,
         appPath: platform === 'web' ? webUrl : appPath
       };
+      
+      console.log('🔍 Frontend Debug - testCaseName:', testCaseName);
+      console.log('🔍 Frontend Debug - testCase:', testCase);
+      console.log('🔍 Frontend Debug - testData:', testData);
 
       // Step 2: Starting emulator
       setTimeout(() => {
         setExecutionStatus(prev => ({
           ...prev,
           message: '📱 Starting emulator and launching app...',
-          progress: 30
+          progress: 20
         }));
       }, 2000);
 
-      // Step 3: Executing test
+      // Step 3: Executing test (this will be the main phase)
       setTimeout(() => {
         setExecutionStatus(prev => ({
           ...prev,
           message: '🧪 Executing test script on emulator...',
-          progress: 60
+          progress: 50
         }));
       }, 5000);
 
-      // Step 4: Generating report
+      // Step 4: Continue test execution (no report generation yet)
       setTimeout(() => {
         setExecutionStatus(prev => ({
           ...prev,
-          message: '📊 Generating comprehensive report...',
-          progress: 80
+          message: '🧪 Test execution in progress...',
+          progress: 70
         }));
-      }, 8000);
+      }, 10000);
 
       const response = await axios.post('/api/tests/execute', testData);
       
       if (response.data.success) {
-        setExecutionStatus({
-          status: 'completed',
-          message: '✅ Test execution completed successfully!',
-          progress: 100,
-          executionId: response.data.executionId,
-          report: response.data.report,
-          summary: response.data.summary,
-          htmlReportUrl: response.data.htmlReportUrl
-        });
+        // First show report generation
+        setExecutionStatus(prev => ({
+          ...prev,
+          message: '📊 Generating comprehensive report...',
+          progress: 90
+        }));
+        
+        // Then show completion after a brief moment
+        setTimeout(() => {
+          setExecutionStatus({
+            status: 'completed',
+            message: '✅ Test execution completed successfully!',
+            progress: 100,
+            executionId: response.data.executionId,
+            report: response.data.report,
+            summary: response.data.summary,
+            htmlReportUrl: response.data.htmlReportUrl
+          });
+        }, 1000);
         toast.success('Test executed successfully! Check the Reports page for detailed results.');
         
-        // Redirect to reports page after 2 seconds
+        // Redirect to specific report after 2 seconds
         setTimeout(() => {
-          window.location.href = '/reports';
+          if (response.data.htmlReportUrl) {
+            // Open the specific report directly instead of going to reports list
+            // Use full backend URL since reports are served by backend on port 5000
+            const fullReportUrl = `http://localhost:5000${response.data.htmlReportUrl}`;
+            window.location.href = fullReportUrl;
+          } else {
+            window.location.href = '/reports';
+          }
         }, 2000);
       } else {
-        throw new Error(response.data.error || 'Test execution failed');
+        // First show report generation for failed tests too
+        setExecutionStatus(prev => ({
+          ...prev,
+          message: '📊 Generating failure report...',
+          progress: 90
+        }));
+        
+        // Then show failure after a brief moment
+        setTimeout(() => {
+          setExecutionStatus({
+            status: 'failed',
+            message: `❌ Test failed: ${response.data.error}`,
+            progress: 100,
+            executionId: response.data.executionId,
+            report: response.data.report,
+            htmlReportUrl: response.data.htmlReportUrl,
+            failureDetails: response.data.failureDetails
+          });
+        }, 1000);
+        
+        // Show failure details in toast
+        const failureMsg = response.data.failureDetails 
+          ? `Test failed at: ${response.data.failureDetails.failedStep} - ${response.data.failureDetails.failureReason}`
+          : response.data.error;
+        
+        toast.error(failureMsg, { duration: 8000 });
+        
+        // Redirect to specific failure report even for failures to show failure details
+        setTimeout(() => {
+          if (response.data.htmlReportUrl) {
+            // Open the specific failure report directly instead of going to reports list
+            // Use full backend URL since reports are served by backend on port 5000
+            const fullReportUrl = `http://localhost:5000${response.data.htmlReportUrl}`;
+            window.location.href = fullReportUrl;
+          } else {
+            window.location.href = '/reports';
+          }
+        }, 3000);
       }
 
     } catch (error) {
@@ -249,7 +254,15 @@ const TestExecution = () => {
         message: `❌ ${error.response?.data?.error || error.message}`,
         progress: 0
       });
-      toast.error('Test execution failed');
+      
+      // Show detailed error message
+      const errorMsg = error.response?.data?.error || error.message;
+      toast.error(`Test execution failed: ${errorMsg}`, { duration: 8000 });
+      
+      // Still redirect to reports page to show any available information
+      setTimeout(() => {
+        window.location.href = '/reports';
+      }, 3000);
     } finally {
       setIsExecuting(false);
     }
@@ -289,6 +302,11 @@ const TestExecution = () => {
         <p className="mt-1 text-sm text-gray-500">
           Convert natural language test cases into automated test scripts
         </p>
+        <div className="mt-2 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+          <p className="text-sm text-blue-700">
+            <span className="font-medium">Required Fields:</span> Fields marked with <span className="text-red-500">*</span> are mandatory
+          </p>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -330,15 +348,31 @@ const TestExecution = () => {
               <h3 className="text-lg font-medium text-gray-900">Test Case</h3>
             </div>
             <div className="card-body">
+              <div className="mb-4">
+                <label htmlFor="testCaseName" className="block text-sm font-medium text-gray-700 mb-2">
+                  Test Case Name <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  id="testCaseName"
+                  value={testCaseName}
+                  onChange={(e) => setTestCaseName(e.target.value)}
+                  placeholder="Enter a name for this test case (required)"
+                  className={`input ${!testCaseName.trim() ? 'border-red-300 focus:border-red-500 focus:ring-red-500' : ''}`}
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  Give your test case a descriptive name
+                </p>
+              </div>
               <div>
                 <label htmlFor="testCase" className="block text-sm font-medium text-gray-700 mb-2">
-                  Describe your test case in natural language
+                  Test Case Description <span className="text-red-500">*</span>
                 </label>
                 <textarea
                   id="testCase"
                   rows={4}
                   className="input"
-                  placeholder="e.g., Login with valid credentials and verify dashboard loads"
+                  placeholder="e.g., Login with valid credentials and verify dashboard loads (required)"
                   value={testCase}
                   onChange={(e) => setTestCase(e.target.value)}
                 />
@@ -403,7 +437,7 @@ const TestExecution = () => {
           {platform === 'web' ? (
             <div className="card">
               <div className="card-header">
-                <h3 className="text-lg font-medium text-gray-900">Web Application URL</h3>
+                <h3 className="text-lg font-medium text-gray-900">Web Application URL <span className="text-red-500">*</span></h3>
               </div>
               <div className="card-body">
                 <div>
@@ -424,7 +458,7 @@ const TestExecution = () => {
           ) : (
             <div className="card">
               <div className="card-header">
-                <h3 className="text-lg font-medium text-gray-900">App Binary</h3>
+                <h3 className="text-lg font-medium text-gray-900">App Binary <span className="text-red-500">*</span></h3>
               </div>
               <div className="card-body">
                 <div
@@ -537,12 +571,62 @@ const TestExecution = () => {
                       
                       {executionStatus.htmlReportUrl && (
                         <button
-                          onClick={() => window.open(executionStatus.htmlReportUrl, '_blank')}
+                          onClick={() => window.open(`http://localhost:5000${executionStatus.htmlReportUrl}`, '_blank')}
                           className="w-full p-2 bg-primary-50 border border-primary-200 rounded-lg text-primary-700 hover:bg-primary-100 transition-colors"
                         >
                           📊 View Detailed Report
                         </button>
                       )}
+                    </div>
+                  )}
+
+                  {executionStatus.status === 'failed' && (
+                    <div className="mt-4 space-y-3">
+                      <div className="p-3 bg-error-50 border border-error-200 rounded-lg">
+                        <p className="text-sm text-error-700">
+                          Execution ID: <span className="font-mono">{executionStatus.executionId}</span>
+                        </p>
+                      </div>
+                      
+                      {executionStatus.failureDetails && (
+                        <div className="space-y-2">
+                          <div className="p-2 bg-red-50 border border-red-200 rounded">
+                            <p className="text-xs font-medium text-red-700">Failed Step:</p>
+                            <p className="text-xs text-red-600 font-mono">{executionStatus.failureDetails.failedStep}</p>
+                          </div>
+                          <div className="p-2 bg-orange-50 border border-orange-200 rounded">
+                            <p className="text-xs font-medium text-orange-700">Failure Reason:</p>
+                            <p className="text-xs text-orange-600">{executionStatus.failureDetails.failureReason}</p>
+                          </div>
+                          {executionStatus.report?.failedStepInfo && (
+                            <div className="p-2 bg-blue-50 border border-blue-200 rounded">
+                              <p className="text-xs font-medium text-blue-700">Step Details:</p>
+                              <p className="text-xs text-blue-600">Number: {executionStatus.report.failedStepInfo.stepNumber}</p>
+                              <p className="text-xs text-blue-600">Type: {executionStatus.report.failedStepInfo.stepType}</p>
+                              <p className="text-xs text-blue-600">Locator: {executionStatus.report.failedStepInfo.stepLocator}</p>
+                            </div>
+                          )}
+                          {executionStatus.failureDetails.screenshots && executionStatus.failureDetails.screenshots.length > 0 && (
+                            <div className="p-2 bg-yellow-50 border border-yellow-200 rounded">
+                              <p className="text-xs font-medium text-yellow-700">Screenshots:</p>
+                              <p className="text-xs text-yellow-600">{executionStatus.failureDetails.screenshots.length} captured</p>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      
+                      {executionStatus.htmlReportUrl && (
+                        <button
+                          onClick={() => window.open(`http://localhost:5000${executionStatus.htmlReportUrl}`, '_blank')}
+                          className="w-full p-2 bg-primary-50 border border-primary-200 rounded-lg text-primary-700 hover:bg-primary-100 transition-colors"
+                        >
+                          📊 View Failure Report
+                        </button>
+                      )}
+                      
+                      <div className="text-center">
+                        <p className="text-xs text-gray-500">Redirecting to Reports page...</p>
+                      </div>
                     </div>
                   )}
                 </div>

@@ -70,7 +70,14 @@ const Reports = () => {
   };
 
   const formatDate = (dateString) => {
-    return new Date(dateString).toLocaleString();
+    if (!dateString) return 'No date available';
+    try {
+      const date = new Date(dateString);
+      if (isNaN(date.getTime())) return 'Invalid date';
+      return date.toLocaleString();
+    } catch (error) {
+      return 'Invalid date';
+    }
   };
 
   const getStatusIcon = (status) => {

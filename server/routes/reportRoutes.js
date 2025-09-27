@@ -89,10 +89,16 @@ router.get('/:reportId.html', async (req, res) => {
     const { reportId } = req.params;
     const htmlPath = path.join(__dirname, '../../reports', `${reportId}.html`);
     
+    console.log(`🔍 Serving HTML report: ${reportId}.html`);
+    console.log(`🔍 File path: ${htmlPath}`);
+    
     if (!await fs.pathExists(htmlPath)) {
+      console.log(`❌ HTML report not found: ${htmlPath}`);
       return res.status(404).json({ success: false, error: 'HTML report not found' });
     }
     
+    console.log(`✅ HTML report found, sending file...`);
+    res.setHeader('Content-Type', 'text/html');
     res.sendFile(htmlPath);
   } catch (error) {
     console.error('Error serving HTML report:', error);

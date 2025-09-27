@@ -470,6 +470,441 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **Issues**: [GitHub Issues](https://github.com/your-org/testkami/issues)
 - **Discord**: [Join our community](https://discord.gg/testkami)
 
+## 📁 Code Structure Deep Dive
+
+### 🏗️ **Architecture Overview**
+
+Testkami follows a **modular microservices architecture** with clear separation of concerns:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    FRONTEND (React)                        │
+├─────────────────────────────────────────────────────────────┤
+│  • TestExecution.js - Main test interface                  │
+│  • Reports.js - Test results viewer                        │
+│  • Template selection & form validation                    │
+└─────────────────────────────────────────────────────────────┘
+                                │
+                                ▼
+┌─────────────────────────────────────────────────────────────┐
+│                    BACKEND (Node.js/Express)               │
+├─────────────────────────────────────────────────────────────┤
+│  • API Routes (testRoutes.js, reportRoutes.js)             │
+│  • Service Layer (automatedTestService.js)                 │
+│  • AI Integration (llmService.js)                          │
+│  • Report Generation (reportService.js)                    │
+│  • Email Service (emailService.js)                         │
+└─────────────────────────────────────────────────────────────┘
+                                │
+                                ▼
+┌─────────────────────────────────────────────────────────────┐
+│                EXTERNAL SERVICES                            │
+├─────────────────────────────────────────────────────────────┤
+│  • Google Gemini AI - Natural language processing          │
+│  • Appium Server - Mobile test automation                  │
+│  • Android Emulator - Device simulation                    │
+│  • WebDriverIO - Browser automation                        │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### 🎨 **Frontend Architecture** (`/client`)
+
+#### **Main Components**
+
+**`src/pages/TestExecution.js`** - The Heart of Test Execution
+```javascript
+// Key State Management
+const [testCaseName, setTestCaseName] = useState('');     // Test case title
+const [testCase, setTestCase] = useState('');             // Natural language description
+const [platform, setPlatform] = useState('android');      // Target platform
+const [uploadedFile, setUploadedFile] = useState(null);    // APK file
+const [executionStatus, setExecutionStatus] = useState(null); // Real-time status
+
+// Template System
+const [testTemplates] = useState([
+  {
+    id: 'alphanso-app-template',
+    name: 'Alphanso App Template',
+    template: 'Click on Next Button\nClick on Language Formation...',
+    description: 'Test Alphanso app language formation exercise...',
+    platform: 'android'
+  }
+  // ... more templates
+]);
+
+// Form Validation
+const validateForm = () => {
+  if (!testCaseName.trim()) {
+    toast.error('Please enter a test case name');
+    return false;
+  }
+  // ... more validation
+};
+
+// Test Execution Flow
+const executeTest = async () => {
+  // 1. Validate form
+  // 2. Show progress updates
+  // 3. Send to backend API
+  // 4. Handle success/failure
+  // 5. Redirect to reports
+};
+```
+
+**`src/pages/Reports.js`** - Test Results Visualization
+```javascript
+// Report Management
+const [reports, setReports] = useState([]);
+const [selectedReport, setSelectedReport] = useState(null);
+
+// Report Display Logic
+const renderReportDetails = (report) => {
+  return (
+    <div className="report-details">
+      {/* Header with test info */}
+      {/* Screenshot gallery */}
+      {/* Step-by-step execution */}
+      {/* Error details if failed */}
+    </div>
+  );
+};
+```
+
+### 🔧 **Backend Architecture** (`/server`)
+
+#### **API Routes** (`/routes`)
+
+**`testRoutes.js`** - Test Execution API
+```javascript
+// Main execution endpoint
+router.post('/execute', async (req, res) => {
+  try {
+    const { testCaseName, naturalLanguageTest, platform, appPath } = req.body;
+    
+    // Input validation
+    const validation = inputValidationService.validateTestInput(naturalLanguageTest);
+    if (!validation.isValid) {
+      return res.status(400).json({
+        success: false,
+        error: validation.message,
+        suggestions: validation.suggestions
+      });
+    }
+    
+    // Execute full automated test
+    const result = await automatedTestService.executeFullTest({
+      testCaseName,
+      naturalLanguageTest,
+      platform,
+      appPath,
+      email: 'amahangade24@gmail.com'
+    });
+    
+    // Return results with proper error handling
+    if (result.success) {
+      res.status(200).json({
+        success: true,
+        executionId: result.executionId,
+        report: result.report,
+        summary: result.summary,
+        htmlReportUrl: result.htmlReportUrl
+      });
+    } else {
+      res.status(500).json({
+        success: false,
+        error: result.error,
+        executionId: result.executionId,
+        report: result.report,
+        htmlReportUrl: result.htmlReportUrl,
+        failureDetails: {
+          failedStep: result.failedStep,
+          failureReason: result.failureReason,
+          screenshots: result.screenshots
+        }
+      });
+    }
+  } catch (error) {
+    // Comprehensive error handling
+  }
+});
+```
+
+#### **Service Layer** (`/services`)
+
+**`automatedTestService.js`** - The Core Orchestrator (1,590 lines)
+
+This is the **most critical file** that orchestrates the entire test execution:
+
+```javascript
+class AutomatedTestService {
+  async executeFullTest(testData) {
+    const executionId = `exec_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const startTime = Date.now();
+    
+    try {
+      // Step 1: Generate test script from natural language
+      const scriptResult = await llmService.generateTestScript(
+        testData.naturalLanguageTest,
+        testData.platform
+      );
+      
+      // Step 2: Start emulator and launch app
+      const emulatorResult = await appiumService.startEmulatorAndLaunchApp(
+        testData.appPath,
+        testData.platform
+      );
+      
+      // Step 3: Execute test script on emulator
+      const testResult = await this.executeTestScript(
+        scriptResult,
+        emulatorResult.driver,
+        executionId
+      );
+      
+      // Step 4: Generate comprehensive report
+      const reportResult = await this.generateReport(
+        testData,
+        scriptResult,
+        emulatorResult,
+        testResult,
+        executionId
+      );
+      
+      // Step 5: Send email report
+      await emailService.sendTestReport(reportResult.report, testData.email);
+      
+      return {
+        success: true,
+        executionId,
+        report: reportResult.report,
+        summary: reportResult.summary,
+        htmlReportUrl: reportResult.htmlPath
+      };
+    } catch (error) {
+      // Comprehensive error handling with report generation
+      const errorReport = await this.generateErrorReport(
+        testData, 
+        error, 
+        executionId, 
+        Date.now() - startTime, 
+        startTime, 
+        [], 
+        []
+      );
+      return { success: false, error: error.message, ...errorReport };
+    }
+  }
+}
+```
+
+**Smart Element Finding** - The Intelligence Layer
+```javascript
+async findElementSmart(driver, locator, timeoutMs = 60000) {
+  const candidates = [];
+  const plain = locator.startsWith('~') ? locator.slice(1) : locator;
+  
+  // Multiple locator strategies
+  if (locator.startsWith('~')) {
+    candidates.push(() => driver.$(`~${plain}`));
+    candidates.push(() => driver.$(`android=new UiSelector().text("${plain}")`));
+    candidates.push(() => driver.$(`android=new UiSelector().textContains("${plain}")`));
+  } else {
+    // XPath support
+    if (locator.startsWith('//') || locator.startsWith('(')) {
+      candidates.push(() => driver.$(locator));
+    }
+    
+    // Resource ID support
+    if (/^[\w.]+:id\//.test(locator)) {
+      candidates.push(() => driver.$(`android=new UiSelector().resourceId("${locator}")`));
+    }
+    
+    // Text matching strategies with fallbacks
+    candidates.push(() => driver.$(`android=new UiSelector().text("${plain}")`));
+    candidates.push(() => driver.$(`android=new UiSelector().textContains("${plain}")`));
+    candidates.push(() => driver.$(`android=new UiSelector().descriptionContains("${plain}")`));
+    
+    // Partial matching for complex phrases
+    const words = plain.split(/\s+/);
+    if (words.length > 1) {
+      words.forEach(word => {
+        if (word.length > 3) {
+          candidates.push(() => driver.$(`android=new UiSelector().textContains("${word}")`));
+        }
+      });
+    }
+    
+    // Scroll into view fallback
+    candidates.push(() => driver.$(`android=new UiScrollable(new UiSelector().scrollable(true)).scrollTextIntoView("${plain}")`));
+  }
+  
+  // Execute strategies with timeout and auto-scroll
+  const deadline = Date.now() + timeoutMs;
+  let lastError;
+  
+  for (const getEl of candidates) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) break;
+    
+    const perStrategyTimeout = Math.min(2000, Math.max(500, remaining));
+    try {
+      const el = await getEl();
+      await el.waitForExist({ timeout: perStrategyTimeout });
+      await el.waitForDisplayed({ timeout: perStrategyTimeout }).catch(() => {});
+      console.log(`✅ Found element with strategy`);
+      return el;
+    } catch (err) {
+      lastError = err;
+      // Auto-scroll and retry
+      if (candidates.indexOf(getEl) < candidates.length - 1) {
+        await this.performScrollGesture(driver, 'down');
+        await driver.pause(1000);
+      }
+    }
+  }
+  
+  throw new Error(`Locator not found within ${timeoutMs}ms: ${plain}`);
+}
+```
+
+**`llmService.js`** - AI Integration (921 lines)
+
+The AI service converts natural language to executable test scripts:
+
+```javascript
+class LLMService {
+  constructor() {
+    // Initialize Gemini AI
+    if (process.env.GOOGLE_API_KEY) {
+      const { GoogleGenerativeAI } = require('@google/generative-ai');
+      this.genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
+      this.model = this.genAI.getGenerativeModel({ 
+        model: process.env.GEMINI_MODEL || 'gemini-1.5-pro' 
+      });
+    }
+  }
+  
+  async generateTestScript(naturalLanguageTest, platform) {
+    try {
+      // Try Gemini AI first
+      if (this.genAI) {
+        const dslResult = await this.compileToDsl(naturalLanguageTest, platform);
+        const steps = this.convertDslToSteps(dslResult);
+        const script = this.generateScriptFromSteps(steps);
+        return {
+          script,
+          steps,
+          source: 'gemini-ai'
+        };
+      }
+    } catch (error) {
+      console.log(`⚠️ Gemini AI failed: ${error.message}`);
+    }
+    
+    // Fallback to local parsing
+    return this.generateFallbackScript(naturalLanguageTest, platform);
+  }
+  
+  parseNaturalLanguageToSteps(naturalLanguageTest) {
+    const lines = naturalLanguageTest.split('\n').map(line => line.trim()).filter(line => line);
+    const steps = [];
+    
+    for (const line of lines) {
+      const lower = line.toLowerCase();
+      
+      // Handle "Open the App" - usually just a wait
+      if (/open\s+(?:the\s+)?app/i.test(lower)) {
+        steps.push({ 
+          type: 'wait',
+          locator: 'app',
+          description: 'Open the App', 
+          code: `await driver.pause(2000);` 
+        });
+        continue;
+      }
+      
+      // Handle scrolling with mobile: scrollGesture
+      if (/scroll\s+(?:in\s+)?(?:the\s+)?(.+)/i.test(lower) || /scroll\s+(up|down|left|right)/i.test(lower)) {
+        const direction = line.match(/scroll\s+(up|down|left|right)/i)?.[1] || 'down';
+        
+        steps.push({
+          type: 'scroll',
+          locator: 'scrollable',
+          description: `Scroll ${direction}`,
+          code: `await this.performScrollGesture(driver, '${direction}');`
+        });
+        continue;
+      }
+      
+      // Handle text entry
+      if (/(^enter\b|^type\b|\binput\b)/.test(lower)) {
+        const value = this.extractValue(line);
+        steps.push({ 
+          type: 'setValue',
+          locator: 'input',
+          value: value,
+          description: `Enter text: ${value}`,
+          code: `await this.setValue(driver, '${value}');`
+        });
+        continue;
+      }
+      
+      // Handle verification with multiple strategies
+      if (/(verify|check|confirm)/.test(lower)) {
+        let target = this.extractValue(line) || this.extractTarget(line);
+        if (target) {
+          steps.push({ 
+            type: 'verify',
+            locator: target,
+            description: `Verify ${target} is displayed`,
+            code: `await this.verifyText(driver, '${target}');`
+          });
+        }
+        continue;
+      }
+      
+      // Handle clicks with smart target extraction
+      if (/click\s+(?:on\s+)?(.+)/i.test(lower)) {
+        const target = this.extractTarget(line);
+        if (target) {
+          steps.push({
+            type: 'click',
+            locator: target,
+            description: `Click on ${target}`,
+            code: `await this.clickElement(driver, '${target}');`
+          });
+        }
+        continue;
+      }
+    }
+    
+    return steps;
+  }
+}
+```
+
+## 🔄 Complete Workflow
+
+### 1. **User Input Phase**
+```
+User opens TestKami → Selects Template OR writes custom test → Uploads APK → Clicks Execute → Frontend validates → Sends POST /api/tests/execute
+```
+
+### 2. **Backend Processing Phase**
+```
+API receives request → Input validation → LLM generates script → Appium starts emulator → Execute script → Generate report → Send email → Return results
+```
+
+### 3. **Test Execution Phase**
+```
+Parse natural language → For each step → Check app state → Execute action → Capture screenshot → Record result → Generate final report
+```
+
+### 4. **Report Generation Phase**
+```
+Collect execution data → Generate JSON report → Generate HTML report → Save screenshots → Send email → Return report URL
+```
+
 ---
 
 <div align="center">

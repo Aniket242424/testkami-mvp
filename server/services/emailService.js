@@ -175,9 +175,9 @@ class EmailService {
 Test Execution Report
 ====================
 
-Test ID: ${report.testId}
-Platform: ${report.platform}
-Test Case: ${report.naturalLanguageTest}
+Test ID: ${report.id || report.testId || 'N/A'}
+Platform: ${report.platform || report.testData?.platform || 'N/A'}
+Test Case: ${report.naturalLanguageTest || report.testData?.naturalLanguageTest || 'N/A'}
 Status: ${report.status.toUpperCase()}
 
 Execution Summary:

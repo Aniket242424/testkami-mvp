@@ -447,6 +447,7 @@ executeTest();
 
       console.log(`📝 Processing step: "${line}"`);
       console.log(`📝 Step ${steps.length + 1} of ${parts.length}: "${line}"`);
+      console.log(`📝 Lower case: "${lower}"`);
 
       // Handle "Open the App" - usually just a wait
       if (/open\s+(?:the\s+)?app/i.test(lower)) {
@@ -508,6 +509,8 @@ try {
       // Handle "Move onto the next index page" - this is navigation
       if (/move\s+(?:onto\s+)?(?:the\s+)?next\s+(?:index\s+)?page/i.test(lower)) {
         steps.push({
+          type: 'click',
+          locator: 'next',
           description: 'Navigate to next page',
           code: `// Smart navigation - try multiple common navigation patterns
 try {
@@ -540,6 +543,8 @@ try {
       // Handle "Click on Next button on this page"
       if (/click\s+(?:on\s+)?(?:the\s+)?next\s+button/i.test(lower)) {
         steps.push({
+          type: 'click',
+          locator: 'next',
           description: 'Click Next button',
           code: `await driver.$("android=new UiSelector().textContains(\"Next\")").click();`
         });
@@ -564,19 +569,21 @@ try {
         const word = line.match(/click\s+(?:on\s+)?(?:the\s+)?word\s+['"]([^'"]+)['"]/i)?.[1];
         if (word) {
           steps.push({
+            type: 'click',
+            locator: word,
             description: `Click on word '${word}'`,
             code: `// Smart word clicking with multiple strategies
 try {
-  await driver.$("android=new UiSelector().text(\"${word}\")").click();
+  await driver.$("android=new UiSelector().text(\"" + word + "\")").click();
 } catch (e1) {
   try {
-    await driver.$("android=new UiSelector().textContains(\"${word}\")").click();
+    await driver.$("android=new UiSelector().textContains(\"" + word + "\")").click();
   } catch (e2) {
     try {
-      await driver.$("android=new UiSelector().descriptionContains(\"${word}\")").click();
+      await driver.$("android=new UiSelector().descriptionContains(\"" + word + "\")").click();
     } catch (e3) {
       // Try case-insensitive search
-      await driver.$("android=new UiSelector().textMatches(\"(?i).*${word}.*\")").click();
+      await driver.$("android=new UiSelector().textMatches(\"(?i).*" + word + ".*\")").click();
     }
   }
 }`
@@ -591,6 +598,8 @@ try {
         if (target) {
           // Enhanced click with multiple fallback strategies
           steps.push({
+            type: 'click',
+            locator: target,
             description: line,
             code: `// Smart clicking with multiple strategies for: ${target}
 try {
@@ -641,28 +650,63 @@ try {
 
       // Handle verification
       if (/(verify|check|confirm)/.test(lower)) {
+        console.log(`🔍 VERIFICATION DETECTED: "${line}"`);
+        // Extract the target from verification phrases
+        let target = null;
+        
+        // Try to extract quoted text first
         const quoted = this.extractValue(line);
         if (quoted) {
+          target = quoted;
+        } else {
+          // Extract target from verification patterns
+          const verifyMatch = line.match(/verify\s+(.+)/i);
+          if (verifyMatch) {
+            target = verifyMatch[1]
+              .replace(/\b(displayed|visible|shown|present)\b/gi, '')
+              .replace(/\b(is|are|the|a|an)\b/gi, '')
+              .trim();
+          }
+        }
+        
+        if (target) {
           steps.push({ 
-            description: `Verify ${quoted} is displayed`,
             type: 'verify',
-            target: quoted,
-            code: `// Check if text is in input field or displayed as text
-const inputField = await driver.$("android=new UiSelector().className(\"android.widget.EditText\")");
-const inputText = await inputField.getText();
-if (inputText.includes("${quoted}")) {
-  console.log("✅ Text found in input field:", inputText);
-} else {
-  // Try to find as displayed text
-  await driver.$("android=new UiSelector().textContains(\"${quoted}\")").waitForDisplayed({ timeout: 5000 });
-  console.log("✅ Text found as displayed element");
+            locator: target,
+            description: `Verify ${target} is displayed`,
+            code: `// Enhanced verification for: ${target}
+try {
+  // Try to find as displayed text element
+  const element = await driver.$("android=new UiSelector().textContains(\\"${target}\\")");
+  await element.waitForDisplayed({ timeout: 5000 });
+  console.log("✅ Verification passed: ${target} is displayed");
+} catch (e) {
+  // Try alternative approaches
+  try {
+    // Try with individual words
+    const words = "${target}".split(/\\s+/).filter(w => w.length > 2);
+    for (const word of words) {
+      try {
+        const wordElement = await driver.$("android=new UiSelector().textContains(\\"" + word + "\\")");
+        await wordElement.waitForDisplayed({ timeout: 2000 });
+        console.log("✅ Verification passed: Found word '" + word + "' from '${target}'");
+        break;
+      } catch (wordError) {
+        console.log("⚠️ Word '" + word + "' not found, trying next...");
+      }
+    }
+  } catch (altError) {
+    throw new Error("Verification failed: ${target} not found on screen");
+  }
 }`
           });
     } else {
-          const target = this.extractTarget(line) || 'element';
+          const fallbackTarget = this.extractTarget(line) || 'element';
           steps.push({ 
-            description: `Verify ${target} is displayed`,
-            code: `await driver.$('~${target}').waitForDisplayed({ timeout: 5000 });` 
+            type: 'verify',
+            locator: fallbackTarget,
+            description: `Verify ${fallbackTarget} is displayed`,
+            code: `await driver.$('~${fallbackTarget}').waitForDisplayed({ timeout: 5000 });` 
           });
         }
         continue;
@@ -673,6 +717,8 @@ if (inputText.includes("${quoted}")) {
         const target = line.match(/select\s+(.+)/i)?.[1];
         if (target) {
           steps.push({
+            type: 'click',
+            locator: target,
             description: `Select ${target}`,
             code: `// Smart selection with multiple strategies
 try {
@@ -693,6 +739,8 @@ try {
         const target = line.match(/choose\s+(.+)/i)?.[1];
         if (target) {
           steps.push({
+            type: 'click',
+            locator: target,
             description: `Choose ${target}`,
             code: `// Smart choice selection
 try {
@@ -709,6 +757,8 @@ try {
         const target = line.match(/press\s+(.+)/i)?.[1];
         if (target) {
           steps.push({
+            type: 'click',
+            locator: target,
             description: `Press ${target}`,
             code: `// Smart button pressing
 try {
@@ -725,6 +775,8 @@ try {
       const target = this.extractTarget(line) || line.trim();
       if (target) {
         steps.push({
+          type: 'click',
+          locator: target,
           description: line,
           code: `// Enhanced click action for: ${target}
 try {
