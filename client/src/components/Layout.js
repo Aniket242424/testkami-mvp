@@ -7,8 +7,7 @@ import {
   FileText, 
   Settings, 
   Menu, 
-  X,
-  ChevronDown
+  X
 } from 'lucide-react';
 
 const Layout = ({ children }) => {

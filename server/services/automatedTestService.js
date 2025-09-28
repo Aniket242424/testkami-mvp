@@ -6,12 +6,22 @@ const llmService = require('./llmService');
 const appiumService = require('./appiumService');
 const reportService = require('./reportService');
 const emailService = require('./emailService');
+const cloudTestService = require('./cloudTestService');
+
+// Constants
+const EXECUTION_TIMEOUT = 90000; // 90 seconds total execution time
+const STEP_TIMEOUT = 60000; // 60 seconds per step
+const APP_STATE_CHECK_INTERVAL = 2000; // 2 seconds
+const APP_FOREGROUND_WAIT = 2000; // 2 seconds
+const MONITOR_DURATION = 3000; // 3 seconds
+const CLOUD_APP_LAUNCH_WAIT = 5000; // 5 seconds
 
 class AutomatedTestService {
   constructor() {
     this.executionId = null;
     this.globalDeadline = null;
     this.pendingSetValueCount = 0;
+    this.stopExecutionFlag = new Map(); // Track stop requests by executionId
   }
 
   async executeFullTest(testData) {
@@ -25,9 +35,6 @@ class AutomatedTestService {
       
       // Step 1: Generate test script
       console.log('📝 Step 1: Generating test script...');
-      console.log('🔍 Input testData:', JSON.stringify(testData, null, 2));
-      console.log('🔍 naturalLanguageTest:', testData.naturalLanguageTest);
-      console.log('🔍 testCaseName:', testData.testCaseName);
       logger.info('🧪 Test', 'Script Generation - Started', { executionId });
       
       const scriptResult = await llmService.generateTestScript(
@@ -35,22 +42,31 @@ class AutomatedTestService {
         testData.platform
       );
       console.log(`🧠 Script source: ${scriptResult?.source || 'unknown'}`);
-      console.log('🔍 Generated script:', scriptResult?.code?.substring(0, 500) + '...');
       
       logger.info('🧪 Test', 'Script Generation - Completed', { executionId });
       
-      // Step 2: Start emulator and launch app
+      // Step 2: Start emulator and launch app (or use cloud device)
       console.log('📱 Step 2: Starting emulator and launching app...');
       logger.info('📱 Emulator', 'Starting emulator and launching app', { executionId });
       
-      const emulatorResult = await this.startEmulatorAndApp(testData);
+      // Check if we should use cloud devices (user preference takes priority)
+      const useCloudDevices = this.shouldUseCloudDevices(testData.useCloudDevices);
+      
+      let emulatorResult;
+      if (useCloudDevices && cloudTestService.isCloudConfigured()) {
+        console.log('🌐 Using cloud devices for test execution...');
+        emulatorResult = await this.startCloudDeviceAndApp(testData);
+      } else {
+        console.log('📱 Using local emulator for test execution...');
+        emulatorResult = await this.startEmulatorAndApp(testData);
+      }
       
       logger.info('📱 Emulator', 'Emulator and app launched successfully', { executionId });
       
       // Step 3: Execute test script (set global 60s deadline)
       console.log('🧪 Step 3: Executing test script...');
       logger.info('🧪 Test', 'Test Execution - Started', { executionId });
-      this.globalDeadline = Date.now() + 90000; // 90s total for execution
+      this.globalDeadline = Date.now() + EXECUTION_TIMEOUT;
       
       const testResult = await this.executeTestScript(scriptResult, emulatorResult.driver, executionId);
       
@@ -62,13 +78,18 @@ class AutomatedTestService {
       
       const reportResult = await this.generateReport(testData, scriptResult, emulatorResult, testResult, executionId);
       
-      // Step 5: Send email report
-      console.log('📧 Step 5: Sending email report...');
-      logger.info('📧 Email', 'Sending test report', { executionId });
-      
-      await emailService.sendTestReport(reportResult, testData.email);
-      
-      logger.info('📧 Email', 'Email report sent successfully', { executionId });
+      // Step 5: Send email report (if email provided)
+      if (testData.email && testData.email.trim()) {
+        console.log('📧 Step 5: Sending email report...');
+        logger.info('📧 Email', 'Sending test report', { executionId });
+        
+        await emailService.sendTestReport(reportResult, testData.email);
+        
+        logger.info('📧 Email', 'Email report sent successfully', { executionId });
+      } else {
+        console.log('📧 Step 5: Skipping email report (no email provided)');
+        logger.info('📧 Email', 'Skipping email report - no email provided', { executionId });
+      }
       
       // Step 6: Cleanup
       console.log('🧹 Step 6: Performing cleanup...');
@@ -100,11 +121,15 @@ class AutomatedTestService {
       // Generate comprehensive error report with failure details
       const errorReport = await this.generateErrorReport(testData, error, executionId, totalDuration, startTime, [], []);
       
-      // Send error email
-      try {
-        await emailService.sendTestReport(errorReport, testData.email);
-      } catch (emailError) {
-        console.error('Failed to send error email:', emailError);
+      // Send error email (if email provided)
+      if (testData.email && testData.email.trim()) {
+        try {
+          await emailService.sendTestReport(errorReport, testData.email);
+        } catch (emailError) {
+          console.error('Failed to send error email:', emailError);
+        }
+      } else {
+        console.log('📧 Skipping error email (no email provided)');
       }
       
       // Return failure result with report instead of throwing
@@ -120,6 +145,8 @@ class AutomatedTestService {
       };
     } finally {
       this.globalDeadline = null;
+      // Clean up stop flag for this execution
+      this.stopExecutionFlag.delete(executionId);
     }
   }
 
@@ -130,33 +157,13 @@ class AutomatedTestService {
       // Check and start Appium server
       await this.ensureAppiumServerRunning();
       
-      // Get the actual APK file path from the file ID
-      console.log('📱 Resolving APK file path...');
-      console.log('📱 File ID from test data:', testData.appPath);
-      
-      const uploadController = require('../controllers/uploadController');
-      console.log('📱 Upload controller loaded:', typeof uploadController);
-      console.log('📱 Upload controller keys:', Object.keys(uploadController));
-      
-      const uploadedFiles = uploadController.uploadedFiles;
-      console.log('📱 Uploaded files Map:', typeof uploadedFiles);
-      console.log('📱 Uploaded files size:', uploadedFiles ? uploadedFiles.size : 'undefined');
-      
-      if (!uploadedFiles) {
-        throw new Error('Uploaded files Map is not available');
-      }
-      
-      const fileInfo = uploadedFiles.get(testData.appPath);
-      
-      if (!fileInfo) {
-        throw new Error(`APK file not found for ID: ${testData.appPath}`);
-      }
-      
-      console.log('📱 File info found:', fileInfo);
+      // Resolve appPath if it's a UUID (from file upload)
+      const actualAppPath = this.resolveAppPath(testData.appPath);
+      console.log(`📱 Resolved app path: ${actualAppPath}`);
       console.log('📱 Using APK path for app installation and launch');
       
       // Start emulator and launch app
-      const emulatorResult = await appiumService.startEmulatorAndLaunchApp(fileInfo.filePath);
+      const emulatorResult = await appiumService.startEmulatorAndLaunchApp(actualAppPath);
       
       console.log('✅ Emulator and app launched successfully');
       
@@ -202,7 +209,7 @@ class AutomatedTestService {
       let serverStarted = false;
       for (let i = 0; i < 30; i++) { // Reduced to 30 seconds
         try {
-          await new Promise(resolve => setTimeout(resolve, 2000)); // Check every 2 seconds
+          await new Promise(resolve => setTimeout(resolve, APP_STATE_CHECK_INTERVAL));
           
           // Try multiple methods to check if Appium is running
           try {
@@ -250,8 +257,6 @@ class AutomatedTestService {
       // Use steps directly from LLM service if available, otherwise parse the script
       let parsed;
       if (scriptResult.steps && scriptResult.steps.length > 0) {
-        console.log('🔍 Using steps directly from LLM service:', scriptResult.steps.length);
-        console.log('🔍 Raw steps from LLM:', JSON.stringify(scriptResult.steps, null, 2));
         parsed = scriptResult.steps.map(step => {
           // Extract locator from the code if it exists
           let locator = step.locator || step.target;
@@ -290,12 +295,8 @@ class AutomatedTestService {
             description: step.description
           };
         });
-        console.log('🔍 Final parsed steps:', JSON.stringify(parsed, null, 2));
-        console.log('🔍 Step types:', parsed.map(s => s.type));
       } else {
-        console.log('🔍 Parsing script to extract steps...');
         parsed = this.parseScriptToSteps(scriptResult.script || scriptResult.code);
-        console.log('🔍 Final parsed steps:', JSON.stringify(parsed, null, 2));
       }
 
       // Reorder: ensure any setValue appears right after "TextFields" click
@@ -312,7 +313,6 @@ class AutomatedTestService {
       // Print a clear, concise step plan before execution
       const plannedSteps = parsed.map((s, idx) => `${idx + 1}. ${s.description || s.type || 'Step'} (${s.type || 'code'})`);
       console.log('🗺️ Planned Steps:\n' + plannedSteps.join('\n'));
-      console.log('🔍 Step details:', JSON.stringify(parsed, null, 2));
       logs.push('Planned Steps:');
       plannedSteps.forEach(s => logs.push(s));
       
@@ -320,9 +320,15 @@ class AutomatedTestService {
         const step = parsed[i];
         const stepStartTime = Date.now();
         
+        // Check if execution was stopped
+        if (this.stopExecutionFlag.get(executionId)) {
+          console.log(`🛑 Test execution ${executionId} was stopped by user`);
+          throw new Error('Test execution was stopped by user');
+        }
+        
         // Global timeout check
         if (this.globalDeadline && Date.now() >= this.globalDeadline) {
-          throw new Error('Global execution timeout reached (90000ms)');
+          throw new Error(`Global execution timeout reached (${EXECUTION_TIMEOUT}ms)`);
         }
         
         // Periodic app state check to detect manual app switching
@@ -346,12 +352,18 @@ class AutomatedTestService {
             console.log(`⚠️ App is not in focus (${appState.state}). Attempting to bring to foreground...`);
             try {
               await this.bringAppToForeground(driver);
-              await driver.pause(2000); // Wait for app to come to foreground
+              await driver.pause(APP_FOREGROUND_WAIT);
             } catch (foregroundError) {
               throw new Error(`Failed to bring app to foreground: ${foregroundError.message}`);
             }
           }
 
+          // Check stop flag again before executing step
+          if (this.stopExecutionFlag.get(executionId)) {
+            console.log(`🛑 Test execution ${executionId} was stopped by user before step ${i + 1}`);
+            throw new Error('Test execution was stopped by user');
+          }
+          
           // Execute structured step if available, otherwise eval fallback
           if (step.type) {
             await this.executeParsedStep(driver, step);
@@ -521,14 +533,12 @@ class AutomatedTestService {
 
   async executeParsedStep(driver, step) {
     // Respect remaining global time
-    const remainingGlobal = this.globalDeadline ? Math.max(0, this.globalDeadline - Date.now()) : 60000;
-    const timeoutMs = Math.min(60000, remainingGlobal);
+    const remainingGlobal = this.globalDeadline ? Math.max(0, this.globalDeadline - Date.now()) : STEP_TIMEOUT;
+    const timeoutMs = Math.min(STEP_TIMEOUT, remainingGlobal);
     const maxRetries = 2; // keep retries minimal to honor global timeout
 
     // Do not auto-dismiss popups before steps to avoid unintended navigation
     
-      console.log(`🔍 Executing step: type="${step.type}", locator="${step.locator}", description="${step.description}"`);
-      console.log(`🔍 Step object:`, JSON.stringify(step, null, 2));
 
     switch (step.type) {
       case 'click': {
@@ -610,7 +620,6 @@ class AutomatedTestService {
               // 1) Try to find a visible, empty EditText field first
               try {
                 const allEditTexts = await driver.$$('android=new UiSelector().className("android.widget.EditText")');
-                console.log(`🔍 Found ${allEditTexts.length} EditText fields`);
                 
                 // Look for an empty, visible field
                 for (let i = 0; i < allEditTexts.length; i++) {
@@ -740,7 +749,6 @@ class AutomatedTestService {
             console.log(`✅ Entered text now reads: "${typed}"`);
             
             // Verify text was entered correctly
-            console.log(`🔍 Verifying text entry...`);
             
             if (!typed || !typed.includes(valueToType)) {
               throw new Error(`Entered text mismatch. Expected contains: "${valueToType}", Actual: "${typed}"`);
@@ -780,11 +788,9 @@ class AutomatedTestService {
         if (target.startsWith('"') && target.endsWith('"')) {
           target = target.slice(1, -1);
         }
-        console.log(`🔍 Verifying: "${target}"`);
         
         // First try to find in input fields - check all EditText fields
         try {
-          console.log(`🔍 Checking all input fields for text: "${target}"`);
           const inputFields = await driver.$$("android=new UiSelector().className(\"android.widget.EditText\")");
           
           for (let i = 0; i < inputFields.length; i++) {
@@ -812,7 +818,6 @@ class AutomatedTestService {
                 }
               }
               
-              console.log(`🔍 Input field ${i + 1} text: "${inputText}"`);
               
               if (inputText && inputText.includes(target)) {
                 console.log(`✅ Text found in input field ${i + 1}: "${inputText}"`);
@@ -925,13 +930,12 @@ class AutomatedTestService {
     }
   }
 
-  async findElementSmart(driver, locator, timeoutMs = 60000) {
+  async findElementSmart(driver, locator, timeoutMs = STEP_TIMEOUT) {
     // Prefer WDIO string selector strategies to avoid unsupported locator issues
     const candidates = [];
 
     // Normalize to plain text target if came with '~'
     const plain = locator.startsWith('~') ? locator.slice(1) : locator;
-    console.log(`🔍 Finding element: "${plain}"`);
 
     if (locator.startsWith('~')) {
       candidates.push(() => driver.$(`~${plain}`));
@@ -1216,7 +1220,6 @@ class AutomatedTestService {
       const currentActivity = await driver.getCurrentActivity();
       const currentPackage = await driver.getCurrentPackage();
       
-      console.log(`🔍 App state check - Package: ${currentPackage}, Activity: ${currentActivity}`);
       
       // Check if we're on the home screen or system UI
       const isHomeScreen = currentPackage.includes('launcher') || 
@@ -1311,7 +1314,7 @@ class AutomatedTestService {
 
       // Monitor for quick popups or state changes over a short period
       const startTime = Date.now();
-      const monitorDuration = 3000; // Monitor for 3 seconds
+      const monitorDuration = MONITOR_DURATION;
       const checkInterval = 100; // Check every 100ms
 
       while (Date.now() - startTime < monitorDuration) {
@@ -1579,6 +1582,12 @@ class AutomatedTestService {
     if (message.includes('instrumentation process is not running') || message.includes('cannot be proxied to uiautomator2 server')) {
       return 'UiAutomator2 server crashed during test execution - this is a system stability issue, not a test logic problem';
     }
+    if (message.includes('cloud device unavailable')) {
+      return 'Cloud device is currently busy. Please try again in a few moments.';
+    }
+    if (message.includes('app upload failed')) {
+      return 'Failed to upload app to cloud device. Please check your app file.';
+    }
     if (message.includes('timeout')) return 'Element not found within timeout period';
     if (message.includes('no such element')) return 'Target element was not found on the screen';
     if (message.includes('not clickable')) return 'Element is not clickable or is disabled';
@@ -1588,6 +1597,98 @@ class AutomatedTestService {
     if (message.includes('appium')) return 'Appium server connection issue';
     
     return error.message;
+  }
+
+  /**
+   * Determine if we should use cloud devices
+   */
+  shouldUseCloudDevices(userPreference = null) {
+    // User preference takes priority
+    if (userPreference !== null) {
+      const cloudConfigured = cloudTestService.isCloudConfigured();
+      return userPreference && cloudConfigured;
+    }
+    
+    // Fallback to environment variable
+    const useCloud = process.env.USE_CLOUD_DEVICES === 'true' || 
+                    process.env.NODE_ENV === 'production';
+    
+    const cloudConfigured = cloudTestService.isCloudConfigured();
+    
+    return useCloud && cloudConfigured;
+  }
+
+  /**
+   * Resolve app path - handle UUID from file uploads
+   */
+  resolveAppPath(appPath) {
+    // If appPath is a UUID (from file upload), resolve it to actual file path
+    if (appPath && appPath.length === 36 && appPath.includes('-')) {
+      const { uploadedFiles } = require('../controllers/uploadController');
+      const fileInfo = uploadedFiles.get(appPath);
+      
+      if (fileInfo && fileInfo.filePath) {
+        console.log(`🔄 Resolved UUID ${appPath} to file: ${fileInfo.filePath}`);
+        return fileInfo.filePath;
+      } else {
+        throw new Error(`Uploaded file not found for ID: ${appPath}`);
+      }
+    }
+    
+    // If it's already a file path, return as-is
+    return appPath;
+  }
+
+  /**
+   * Start cloud device and launch app
+   */
+  async startCloudDeviceAndApp(testData) {
+    try {
+      console.log('🌐 Starting cloud device and launching app...');
+      
+      // Resolve appPath if it's a UUID (from file upload)
+      const actualAppPath = this.resolveAppPath(testData.appPath);
+      console.log(`📱 Resolved app path: ${actualAppPath}`);
+      
+      // Upload APK to BrowserStack
+      const appUrl = await cloudTestService.uploadAppToBrowserStack(actualAppPath);
+      
+      // Create cloud driver
+      const driver = await cloudTestService.createCloudDriver(appUrl);
+      
+      // Wait for app to launch
+      await driver.pause(CLOUD_APP_LAUNCH_WAIT);
+      
+      console.log('✅ Cloud device and app launched successfully');
+      
+      return {
+        driver,
+        emulatorId: 'cloud-device',
+        appUrl
+      };
+      
+    } catch (error) {
+      console.error('❌ Failed to start cloud device:', error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Stop test execution
+   */
+  stopTestExecution(executionId) {
+    console.log(`🛑 Attempting to stop test execution: ${executionId}`);
+    
+    // Set stop flag for this execution
+    this.stopExecutionFlag.set(executionId, true);
+    
+    // Also set global deadline to force timeout
+    if (this.globalDeadline) {
+      this.globalDeadline = Date.now(); // Force immediate timeout
+    }
+    
+    console.log(`✅ Test execution ${executionId} marked for termination`);
+    return true;
   }
 }
 

@@ -85,7 +85,6 @@ router.post('/generate-script', async (req, res) => {
 router.post('/execute', async (req, res) => {
   try {
     console.log('🚀 EXECUTE API CALLED - Request Body:', JSON.stringify(req.body, null, 2));
-    console.log('🔍 testCaseName received:', req.body.testCaseName);
     
     const {
       testCaseName,
@@ -94,7 +93,8 @@ router.post('/execute', async (req, res) => {
       appId,
       appPath,
       script,
-      email = 'amahangade24@gmail.com'
+      email,
+      useCloudDevices
     } = req.body;
 
     if (!naturalLanguageTest) {
@@ -114,10 +114,7 @@ router.post('/execute', async (req, res) => {
     }
 
     // 🔍 COMPREHENSIVE INPUT VALIDATION
-    console.log('🔍 Validating test input...');
     const validationResult = inputValidationService.validateTestInput(naturalLanguageTest, platform);
-    
-    console.log('🔍 Validation result:', JSON.stringify(validationResult, null, 2));
     
     if (!validationResult.isValid) {
       console.log('❌ Input validation failed:', validationResult.errors);
@@ -167,7 +164,8 @@ router.post('/execute', async (req, res) => {
       platform,
       appPath,
       appId,
-      email
+      email,
+      useCloudDevices
     });
     
     console.log('📊 Automation result:', JSON.stringify(result, null, 2));
@@ -407,6 +405,66 @@ router.get('/stats', async (req, res) => {
       error: error.message,
       message: 'Failed to get test statistics'
     });
+  }
+});
+
+// Stop test execution
+router.post('/stop', async (req, res) => {
+  try {
+    const { executionId } = req.body;
+
+    if (!executionId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Execution ID is required'
+      });
+    }
+
+    console.log(`🛑 Stop execution requested for: ${executionId}`);
+
+    // Stop the test execution
+    const stopped = await automatedTestService.stopTestExecution(executionId);
+
+    if (stopped) {
+      res.status(200).json({
+        success: true,
+        message: 'Test execution stopped successfully',
+        executionId: executionId
+      });
+    } else {
+      res.status(404).json({
+        success: false,
+        error: 'Test execution not found or already completed',
+        executionId: executionId
+      });
+    }
+
+  } catch (error) {
+    console.error('Error stopping test execution:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to stop test execution',
+      message: error.message
+    });
+  }
+});
+
+// Check emulator availability
+router.get('/emulator/status', async (req, res) => {
+  try {
+    const { exec } = require('child_process');
+    const { promisify } = require('util');
+    const execAsync = promisify(exec);
+    
+    // Check if Android SDK is available
+    try {
+      await execAsync('adb version');
+      res.json({ available: true, message: 'Android SDK detected' });
+    } catch (error) {
+      res.json({ available: false, message: 'Android SDK not found' });
+    }
+  } catch (error) {
+    res.json({ available: false, message: 'Unable to check emulator status' });
   }
 });
 

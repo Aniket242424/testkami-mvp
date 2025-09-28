@@ -34,13 +34,18 @@
 ### 🎯 **User-Friendly Experience**
 - **Natural Language Input**: Write tests in plain English
 - **Test Templates**: Pre-built templates for common scenarios
-- **Progress Tracking**: Real-time execution progress with emojis
-- **Error Handling**: User-friendly error messages
+- **Realistic Progress Tracking**: Accurate progress bar with real-time updates
+- **Stop Execution**: Cancel running tests with one click
+- **Mandatory Field Validation**: Required fields clearly marked with asterisks
+- **Test Case Name Field**: Custom test case naming for better organization
+- **Error Handling**: User-friendly error messages with detailed failure info
 - **No Technical Knowledge Required**: Perfect for non-technical users
 
 ### 🔧 **Smart Configuration**
 - **AVD Auto-Detection**: Automatically finds your Android emulators
 - **Configuration Scripts**: Easy setup with `npm run configure-avd`
+- **Cloud Device Support**: BrowserStack integration for cloud testing
+- **Environment Control**: Switch between local emulator and cloud devices via .env
 - **Fallback System**: Works with or without real emulator setup
 - **Environment Validation**: Checks all requirements on startup
 
@@ -237,6 +242,69 @@ It's like having a team of robots working together to test your app! 🤖✨
 - **iOS**: IPA files (simulator support)
 - **Web**: URL-based testing
 
+## ☁️ Cloud Device Support
+
+### BrowserStack Integration
+Testkami now supports cloud device testing through BrowserStack:
+
+#### **Setup Cloud Testing**
+1. **Get BrowserStack Account**: Sign up at [browserstack.com](https://browserstack.com)
+2. **Get Credentials**: Find your username and access key in BrowserStack dashboard
+3. **Configure Environment**: Update your `.env` file:
+   ```bash
+   USE_CLOUD_DEVICES=true
+   BROWSERSTACK_USERNAME=your_username
+   BROWSERSTACK_ACCESS_KEY=your_access_key
+   ```
+
+#### **Cloud vs Local Testing**
+- **Local Emulator** (`USE_CLOUD_DEVICES=false`): Uses your local Android emulator
+- **Cloud Devices** (`USE_CLOUD_DEVICES=true`): Uses BrowserStack cloud devices
+
+#### **Benefits of Cloud Testing**
+- **No Local Setup**: No need for Android SDK or emulator
+- **Real Devices**: Test on actual Samsung Galaxy S10, Google Pixel, etc.
+- **Scalability**: Run multiple tests simultaneously
+- **Reliability**: No local machine dependencies
+
+#### **Free Tier Limits**
+- **100 minutes/month** on BrowserStack free plan
+- **Perfect for MVP testing** and development
+
+## 🚀 Deployment Scenarios
+
+### **Scenario 1: Local Development**
+✅ **Perfect for Development Teams**
+- Each developer runs Testkami locally
+- Uses their own Android emulator
+- No cloud dependencies
+- Full control over testing environment
+
+### **Scenario 2: Production Deployment**
+✅ **Cloud-First Approach**
+- Deploy to Railway, Vercel, or similar platforms
+- Users choose between Local Emulator or Cloud Devices
+- **Local Emulator**: Only works if user has Android SDK installed
+- **Cloud Devices**: Works for everyone (BrowserStack)
+
+### **Scenario 3: Hybrid Deployment**
+✅ **Best User Experience**
+- Deploy to cloud platform
+- Users get choice in UI:
+  - **"Local Emulator"** - If they have Android SDK
+  - **"Cloud Devices"** - Works for everyone
+- Automatic fallback to cloud if local not available
+
+### **User Experience Flow**
+```
+1. User opens Testkami in browser
+2. User selects "Local Emulator" or "Cloud Devices"
+3. If Local: Checks if Android SDK available
+4. If Cloud: Uses BrowserStack (100 min/month free)
+5. Test executes on chosen device
+6. User gets report regardless of choice
+```
+
 ## 🔧 Configuration
 
 ### AVD Configuration
@@ -253,8 +321,17 @@ npm run configure-avd
 
 ### Environment Variables
 ```bash
-# Create .env file
-OPENAI_API_KEY=your_openai_key
+# Create .env file in server directory
+USE_GEMINI=true
+GEMINI_API_KEY=your_gemini_api_key
+GEMINI_MODEL=gemini-2.0-flash
+
+# Cloud Device Configuration (Optional)
+USE_CLOUD_DEVICES=false
+BROWSERSTACK_USERNAME=your_browserstack_username
+BROWSERSTACK_ACCESS_KEY=your_browserstack_access_key
+
+# Email Configuration (Optional)
 SMTP_HOST=your_smtp_host
 SMTP_PORT=587
 SMTP_USER=your_email
@@ -300,11 +377,20 @@ SMTP_PASS=your_password
 
 ## 🚀 Advanced Features
 
-### Real-Time Progress
+### Real-Time Progress & Control
 - **Live Status Updates**: See what's happening in real-time
-- **Progress Bar**: Visual execution progress
-- **Step Indicators**: Current execution phase
-- **Error Handling**: User-friendly error messages
+- **Accurate Progress Bar**: Realistic progress tracking (5% → 10% → 20% → 30% → 95% → 100%)
+- **Step Indicators**: Current execution phase with detailed messages
+- **Stop Execution**: Cancel running tests with red "Stop Execution" button
+- **Execution ID Tracking**: Monitor specific test runs
+- **Error Handling**: User-friendly error messages with failure details
+
+### Smart Test Execution
+- **App State Monitoring**: Detects if app is running and in focus
+- **Automatic Recovery**: Brings app to foreground if needed
+- **Enhanced Error Capture**: Detailed step information in failure reports
+- **Screenshot Management**: Organized screenshots with execution IDs
+- **UUID File Resolution**: Seamless APK file handling from uploads
 
 ### Smart Error Recovery
 - **Automatic Retry**: Retries failed operations

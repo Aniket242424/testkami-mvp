@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { 
   Upload, 
@@ -6,7 +6,6 @@ import {
   Smartphone, 
   Globe, 
   FileText, 
-  AlertCircle,
   CheckCircle,
   Clock,
   XCircle,
@@ -22,9 +21,13 @@ const TestExecution = () => {
   const [platform, setPlatform] = useState('android');
   const [appPath, setAppPath] = useState('');
   const [webUrl, setWebUrl] = useState('');
+  const [useCloudDevices, setUseCloudDevices] = useState(false);
+  const [localEmulatorAvailable, setLocalEmulatorAvailable] = useState(false);
   const [uploadedFile, setUploadedFile] = useState(null);
   const [isExecuting, setIsExecuting] = useState(false);
   const [executionStatus, setExecutionStatus] = useState(null);
+  const [currentExecutionId, setCurrentExecutionId] = useState(null);
+  const [email, setEmail] = useState('');
       const [testTemplates] = useState([
         {
           id: 'alphanso-app-template',
@@ -49,6 +52,21 @@ const TestExecution = () => {
         }
       ]);
   const [selectedTemplate, setSelectedTemplate] = useState('');
+
+  // Check if local emulator is available
+  useEffect(() => {
+    const checkLocalEmulator = async () => {
+      try {
+        const response = await axios.get('/api/emulator/status');
+        setLocalEmulatorAvailable(response.data.available);
+      } catch (error) {
+        console.log('Local emulator not available:', error.message);
+        setLocalEmulatorAvailable(false);
+      }
+    };
+    
+    checkLocalEmulator();
+  }, []);
 
   const onDrop = async (acceptedFiles) => {
     const file = acceptedFiles[0];
@@ -120,31 +138,63 @@ const TestExecution = () => {
     return true;
   };
 
+  const stopExecution = async () => {
+    if (!currentExecutionId) return;
+    
+    try {
+      await axios.post('/api/tests/stop', { executionId: currentExecutionId });
+      toast.success('Test execution stopped successfully');
+      
+      // Reset states
+      setIsExecuting(false);
+      setExecutionStatus(null);
+      setCurrentExecutionId(null);
+      
+    } catch (error) {
+      console.error('Error stopping test execution:', error);
+      toast.error('Failed to stop test execution');
+      
+      // Reset states anyway
+      setIsExecuting(false);
+      setExecutionStatus(null);
+      setCurrentExecutionId(null);
+    }
+  };
+
   const executeTest = async () => {
     if (!validateForm()) return;
 
     try {
       setIsExecuting(true);
+      setCurrentExecutionId(null); // Reset previous execution ID
       
       // Step 1: Initializing
       setExecutionStatus({
         status: 'initializing',
         message: '🤖 Generating test script from natural language...',
-        progress: 10
+        progress: 5
       });
 
       const testData = {
         testCaseName: testCaseName.trim() || 'Unnamed Test Case',
         naturalLanguageTest: testCase.trim(),
         platform: platform,
-        appPath: platform === 'web' ? webUrl : appPath
+        appPath: platform === 'web' ? webUrl : appPath,
+        useCloudDevices: useCloudDevices,
+        email: email.trim() || null
       };
       
-      console.log('🔍 Frontend Debug - testCaseName:', testCaseName);
-      console.log('🔍 Frontend Debug - testCase:', testCase);
-      console.log('🔍 Frontend Debug - testData:', testData);
 
-      // Step 2: Starting emulator
+      // Step 2: Sending request (quick)
+      setTimeout(() => {
+        setExecutionStatus(prev => ({
+          ...prev,
+          message: '📤 Sending request to server...',
+          progress: 10
+        }));
+      }, 500);
+
+      // Step 3: Starting emulator (takes time)
       setTimeout(() => {
         setExecutionStatus(prev => ({
           ...prev,
@@ -153,32 +203,24 @@ const TestExecution = () => {
         }));
       }, 2000);
 
-      // Step 3: Executing test (this will be the main phase)
+      // Step 4: Test execution starts (main phase)
       setTimeout(() => {
         setExecutionStatus(prev => ({
           ...prev,
-          message: '🧪 Executing test script on emulator...',
-          progress: 50
-        }));
-      }, 5000);
-
-      // Step 4: Continue test execution (no report generation yet)
-      setTimeout(() => {
-        setExecutionStatus(prev => ({
-          ...prev,
+          status: 'running',
           message: '🧪 Test execution in progress...',
-          progress: 70
+          progress: 30
         }));
-      }, 10000);
+      }, 4000);
 
       const response = await axios.post('/api/tests/execute', testData);
       
       if (response.data.success) {
-        // First show report generation
+        // Test completed - show report generation
         setExecutionStatus(prev => ({
           ...prev,
           message: '📊 Generating comprehensive report...',
-          progress: 90
+          progress: 95
         }));
         
         // Then show completion after a brief moment
@@ -192,7 +234,8 @@ const TestExecution = () => {
             summary: response.data.summary,
             htmlReportUrl: response.data.htmlReportUrl
           });
-        }, 1000);
+          setCurrentExecutionId(response.data.executionId);
+        }, 1500);
         toast.success('Test executed successfully! Check the Reports page for detailed results.');
         
         // Redirect to specific report after 2 seconds
@@ -211,7 +254,7 @@ const TestExecution = () => {
         setExecutionStatus(prev => ({
           ...prev,
           message: '📊 Generating failure report...',
-          progress: 90
+          progress: 95
         }));
         
         // Then show failure after a brief moment
@@ -225,7 +268,8 @@ const TestExecution = () => {
             htmlReportUrl: response.data.htmlReportUrl,
             failureDetails: response.data.failureDetails
           });
-        }, 1000);
+          setCurrentExecutionId(response.data.executionId);
+        }, 1500);
         
         // Show failure details in toast
         const failureMsg = response.data.failureDetails 
@@ -433,6 +477,87 @@ const TestExecution = () => {
             </div>
           </div>
 
+          {/* Device Selection */}
+          <div className="card">
+            <div className="card-header">
+              <h3 className="text-lg font-medium text-gray-900">Device Selection</h3>
+            </div>
+            <div className="card-body">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <button
+                  onClick={() => setUseCloudDevices(false)}
+                  disabled={!localEmulatorAvailable}
+                  className={`p-4 rounded-lg border transition-colors ${
+                    !useCloudDevices
+                      ? 'border-primary-300 bg-primary-50'
+                      : localEmulatorAvailable
+                      ? 'border-gray-200 hover:border-gray-300'
+                      : 'border-gray-200 bg-gray-50 opacity-50 cursor-not-allowed'
+                  }`}
+                >
+                  <div className="flex items-center">
+                    <Smartphone className="h-5 w-5 text-blue-500 mr-2" />
+                    <div>
+                      <span className="font-medium block">Local Emulator</span>
+                      <span className="text-xs text-gray-500">
+                        Your local Android emulator
+                      </span>
+                    </div>
+                  </div>
+                </button>
+                <button
+                  onClick={() => setUseCloudDevices(true)}
+                  className={`p-4 rounded-lg border transition-colors ${
+                    useCloudDevices
+                      ? 'border-primary-300 bg-primary-50'
+                      : 'border-gray-200 hover:border-gray-300'
+                  }`}
+                >
+                  <div className="flex items-center">
+                    <Globe className="h-5 w-5 text-green-500 mr-2" />
+                    <div>
+                      <span className="font-medium block">Cloud Devices</span>
+                      <span className="text-xs text-gray-500">BrowserStack cloud devices</span>
+                    </div>
+                  </div>
+                </button>
+              </div>
+              {useCloudDevices && (
+                <div className="mt-3 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                  <p className="text-sm text-blue-700">
+                    <strong>Cloud Testing:</strong> Uses BrowserStack cloud devices. No local setup required. 
+                    Free tier includes 100 minutes/month.
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Email Report (Optional) */}
+          <div className="card">
+            <div className="card-header">
+              <h3 className="text-lg font-medium text-gray-900">Email Report (Optional)</h3>
+            </div>
+            <div className="card-body">
+              <div>
+                <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-2">
+                  Email Address
+                </label>
+                <input
+                  type="email"
+                  id="email"
+                  className="input"
+                  placeholder="your-email@example.com"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  Enter your email to receive a detailed test report. Leave empty to skip email reports.
+                </p>
+              </div>
+            </div>
+          </div>
+
           {/* App Upload/URL */}
           {platform === 'web' ? (
             <div className="card">
@@ -494,8 +619,17 @@ const TestExecution = () => {
             </div>
           )}
 
-          {/* Execute Button */}
-          <div className="flex justify-end">
+          {/* Execute/Stop Buttons */}
+          <div className="flex justify-end gap-3">
+            {isExecuting && (
+              <button
+                onClick={stopExecution}
+                className="btn-secondary px-6 py-3 text-base font-medium bg-red-600 hover:bg-red-700 text-white"
+              >
+                <XCircle className="h-5 w-5 mr-2" />
+                Stop Execution
+              </button>
+            )}
             <button
               onClick={executeTest}
               disabled={isExecuting}

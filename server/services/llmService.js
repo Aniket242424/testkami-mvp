@@ -158,8 +158,6 @@ Return ONLY the JSON.
   async generateTestScript(testCase, platform) {
     try {
       console.log(`🤖 Generating test script for: "${testCase}" (${platform})`);
-      console.log(`🔍 Raw testCase received:`, JSON.stringify(testCase));
-      console.log(`🔍 TestCase length:`, testCase ? testCase.length : 'undefined');
       
       // Basic input validation
       if (!testCase || typeof testCase !== 'string' || testCase.trim().length < 5) {
@@ -414,8 +412,6 @@ executeTest();
       .map(s => s.trim())
       .filter(Boolean);
 
-    console.log('🔍 Parsing test steps:', parts);
-    console.log('🔍 Total parts found:', parts.length);
 
     const addClick = (target, description = null) => {
       const cleanTarget = this.normalizeTarget(target);
@@ -650,7 +646,6 @@ try {
 
       // Handle verification
       if (/(verify|check|confirm)/.test(lower)) {
-        console.log(`🔍 VERIFICATION DETECTED: "${line}"`);
         // Extract the target from verification phrases
         let target = null;
         

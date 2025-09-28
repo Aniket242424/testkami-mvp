@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import { 
-  Settings as SettingsIcon,
   Key,
   Mail,
   Server,
@@ -37,7 +36,7 @@ const Settings = () => {
   const checkSystemStatus = async () => {
     try {
       // Check server health
-      const healthResponse = await axios.get('/health');
+      await axios.get('/health');
       setSystemStatus(prev => ({ ...prev, server: 'healthy' }));
     } catch (error) {
       setSystemStatus(prev => ({ ...prev, server: 'unhealthy' }));
